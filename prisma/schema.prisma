@@ -1,0 +1,37 @@
+generator client {
+    provider = "prisma-client-js"
+}
+
+datasource db {
+    provider     = "sqlite"
+    url          = "file:../test/test.db"
+    relationMode = "prisma"
+}
+
+model User {
+    // 1. 物理主键
+    id Int @id @default(autoincrement())
+
+    // 2. 随机 Salt (适配 SQLite 的随机数语法)
+    // Code will generate this
+    idSalt Int?
+
+    name  String?
+    posts Post[]
+}
+
+model Post {
+    postPk     Int  @id @default(autoincrement())
+    // Post 也加上 Salt，这样 Post ID 也会被混淆
+    postPkSalt Int?
+
+    title String
+
+    // 3. 外键关联字段 (遵循 xxxId + xxxIdSalt 规范)
+    authorId     Int
+    authorIdSalt Int?
+
+    author User @relation(fields: [authorId], references: [id])
+
+    @@index([authorId])
+}

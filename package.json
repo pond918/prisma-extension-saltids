@@ -1,0 +1,32 @@
+{
+  "name": "prisma-extension-saltids",
+  "version": "1.0.2",
+  "description": "Transparently transform Auto-Increment Int ID + Random Salt into a single Public Int ID. Zero schema overhead.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "keywords": [
+    "prisma",
+    "extension",
+    "saltids",
+    "hashids",
+    "sqids",
+    "id",
+    "salt"
+  ],
+  "author": "",
+  "license": "MIT",
+  "peerDependencies": {
+    "@prisma/client": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "prisma": "^5.0.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "vitest": "^4.0.18"
+  }
+}
