@@ -1,5 +1,5 @@
-import { Prisma, PrismaClientExtends } from "@prisma/client";
-import { deepHijackResult, deepTransformInput, deepInjectSalt } from "./logic";
+import { Prisma } from "@prisma/client";
+import { deepHijackResult, deepInjectSalt, deepTransformInput } from "./logic";
 import { SaltIdsOptions } from "./types";
 import { ModelRegistry } from "./utils";
 
@@ -13,12 +13,12 @@ export const saltIdsExtension = (options?: SaltIdsOptions) => {
 
   const registry = new ModelRegistry();
 
-  return Prisma.defineExtension((client: PrismaClientExtends) => {
+  return Prisma.defineExtension((client) => {
     return client.$extends({
       name: "prisma-extension-saltids",
       query: {
         $allModels: {
-          async $allOperations({ model, operation, args, query }) {
+          async $allOperations({ model, operation, args, query }: { model: string, operation: string, args: any, query: (args: any) => Promise<any> }) {
             // Ensure registry is initialized
             // @ts-ignore
             if (Prisma.dmmf) {

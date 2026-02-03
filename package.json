@@ -4,8 +4,13 @@
   "description": "Transparently transform Auto-Increment Int ID + Random Salt into a single Public Int ID. Zero schema overhead.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "test": "vitest run",
+    "prepublishOnly": "pnpm run build"
   },
   "keywords": [
     "prisma",
@@ -16,7 +21,15 @@
     "id",
     "salt"
   ],
-  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pond918/prisma-extension-saltids.git"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "author": "James P",
   "license": "MIT",
   "peerDependencies": {
     "@prisma/client": "^5.0.0"
@@ -24,9 +37,7 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "prisma": "^5.0.0",
-    "typescript": "^5.0.0"
-  },
-  "dependencies": {
+    "typescript": "^5.0.0",
     "vitest": "^4.0.18"
   }
 }

@@ -11,9 +11,6 @@ importers:
       '@prisma/client':
         specifier: ^5.0.0
         version: 5.22.0(prisma@5.22.0)
-      vitest:
-        specifier: ^4.0.18
-        version: 4.0.18(@types/node@20.19.30)
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -24,6 +21,9 @@ importers:
       typescript:
         specifier: ^5.0.0
         version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@types/node@20.19.30)
 
 packages:
 
