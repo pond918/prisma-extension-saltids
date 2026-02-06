@@ -8,7 +8,7 @@ export { SaltIdsOptions, SaltIdsHelper };
 
 export const saltIdsExtension = (
   options: SaltIdsOptions,
-  dmmf: typeof Prisma.dmmf,
+  dmmf?: typeof Prisma.dmmf,
 ) => {
   const config: Required<SaltIdsOptions> = {
     saltLength: options?.saltLength ?? 4,
@@ -62,9 +62,45 @@ export const saltIdsExtension = (
 
             // 场景：用户调用 findUnique，但我们注入了 salt。
             // 此时 args.where 包含 { id, salt }，这在没有联合唯一索引时会导致 Prisma 报错。
-            // 解决：拦截此操作，手动改为调用 findFirst。
+            // 解决：拦截此操作，手动清理 args.where 中的 salt，调用原 query，并在结果中验证。
             if (operation === "findUnique" && didTransformId) {
-              result = await (client as any)[model].findFirst(args);
+              const saltFields = registry.getSaltFields(model);
+              const expectedSalts: Record<string, any> = {};
+
+              // Helper: Recursively extract and remove salt fields from object
+              const extractAndRemoveSalts = (obj: any) => {
+                if (!obj || typeof obj !== "object") return;
+                for (const key of Object.keys(obj)) {
+                  const saltDef = saltFields.find((f) => f.salt === key);
+                  if (saltDef) {
+                    expectedSalts[key] = obj[key];
+                    delete obj[key];
+                  } else if (typeof obj[key] === "object") {
+                    extractAndRemoveSalts(obj[key]);
+                  }
+                }
+              };
+
+              if (args.where) extractAndRemoveSalts(args.where);
+
+              // Ensure salt fields are selected if we are using select
+              if (args.select && Object.keys(expectedSalts).length > 0) {
+                for (const key of Object.keys(expectedSalts)) {
+                  args.select[key] = true;
+                }
+              }
+
+              result = await query(args);
+
+              // Verify salt match
+              if (result) {
+                for (const [key, val] of Object.entries(expectedSalts)) {
+                  if (result[key] !== val) {
+                    result = null;
+                    break;
+                  }
+                }
+              }
             } else {
               result = await query(args);
             }

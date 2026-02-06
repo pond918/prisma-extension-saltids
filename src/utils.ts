@@ -69,8 +69,8 @@ export class ModelRegistry {
   public initialized = false;
 
   init(dmmf: any, suffix: string) {
-    if (this.initialized || !dmmf) return;
-    this.parse(dmmf, suffix);
+    if (this.initialized) return;
+    dmmf && this.parse(dmmf, suffix);
     this.initialized = true;
   }
 
