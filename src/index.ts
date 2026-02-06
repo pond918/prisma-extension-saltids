@@ -1,11 +1,15 @@
-import { Prisma } from "@prisma/client";
+import { Prisma as PrismaExtension } from "@prisma/client/extension";
+import { Prisma as Prisma } from "@prisma/client";
 import { deepHijackResult, deepInjectSalt, deepTransformInput } from "./logic";
 import { SaltIdsOptions } from "./types";
-import { ModelRegistry } from "./utils";
+import { ModelRegistry, SaltIdsHelper } from "./utils";
 
-export { SaltIdsOptions };
+export { SaltIdsOptions, SaltIdsHelper };
 
-export const saltIdsExtension = (options?: SaltIdsOptions) => {
+export const saltIdsExtension = (
+  options: SaltIdsOptions,
+  dmmf: typeof Prisma.dmmf,
+) => {
   const config: Required<SaltIdsOptions> = {
     saltLength: options?.saltLength ?? 4,
     saltSuffix: options?.saltSuffix ?? "Salt",
@@ -13,17 +17,15 @@ export const saltIdsExtension = (options?: SaltIdsOptions) => {
 
   const registry = new ModelRegistry();
 
-  return Prisma.defineExtension((client) => {
+  return PrismaExtension.defineExtension((client) => {
     return client.$extends({
       name: "prisma-extension-saltids",
       query: {
         $allModels: {
-          async $allOperations({ model, operation, args, query }: { model: string, operation: string, args: any, query: (args: any) => Promise<any> }) {
+          async $allOperations({ model, operation, args, query }) {
             // Ensure registry is initialized
-            // @ts-ignore
-            if (Prisma.dmmf) {
-              // @ts-ignore
-              registry.init(Prisma.dmmf, config.saltSuffix);
+            if (!registry.initialized) {
+              registry.init(dmmf || Prisma.dmmf, config.saltSuffix);
             }
 
             // ------------------------------------------------

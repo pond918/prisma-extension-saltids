@@ -1,7 +1,7 @@
 /**
  * SaltID Helper (Pure Number)
  */
-const DEFAULT_SALT_LEN = 6;
+const DEFAULT_SALT_LEN = 4;
 
 export class SaltIdsHelper {
   static encode(
@@ -9,23 +9,33 @@ export class SaltIdsHelper {
     salt: number,
     saltLen: number = DEFAULT_SALT_LEN,
   ): number {
-    return Number(`${salt}${realId}`);
+    const saltStr = salt.toString();
+    if (salt < 0 || saltStr.length !== saltLen) {
+      throw new Error(`Salt must be positive and length must be ${saltLen}`);
+    }
+    const resultStr = saltStr + Math.abs(realId).toString();
+    const result = Number(resultStr);
+    return realId < 0 ? -result : result;
   }
 
   static decode(
     pid: number,
     saltLen: number = DEFAULT_SALT_LEN,
   ): { id: number; salt: number } {
-    const str = pid.toString();
-    // 容错：长度不足则不做处理
-    if (str.length <= saltLen) {
+    const pidStr = Math.abs(pid).toString();
+
+    if (pidStr.length <= saltLen) {
       return { id: pid, salt: 0 };
     }
-    const saltStr = str.slice(0, saltLen);
-    const idStr = str.slice(saltLen);
+
+    const saltStr = pidStr.slice(0, saltLen);
+    const idStr = pidStr.slice(saltLen);
+    const salt = Number(saltStr);
+    const id = Number(idStr);
+
     return {
-      salt: parseInt(saltStr, 10),
-      id: parseInt(idStr, 10),
+      id: pid < 0 ? -id : id,
+      salt: salt,
     };
   }
 
@@ -33,13 +43,12 @@ export class SaltIdsHelper {
     val: number,
     saltLen: number = DEFAULT_SALT_LEN,
   ): boolean {
-    return val.toString().length > saltLen;
+    return Math.abs(val).toString().length > saltLen;
   }
 
   static generateSalt(saltLen: number = DEFAULT_SALT_LEN): number {
-    const min = Math.pow(10, saltLen - 1); // e.g. 100
-    const max = Math.pow(10, saltLen) - 1; // e.g. 999
-    return Math.floor(min + Math.random() * (max - min + 1));
+    const min = 10 ** (saltLen - 1);
+    return Math.floor(min + Math.random() * 9 * min);
   }
 }
 
@@ -57,10 +66,10 @@ export interface RelationField {
 export class ModelRegistry {
   private saltFields = new Map<string, SaltField[]>();
   private relations = new Map<string, Map<string, RelationField>>();
-  private initialized = false;
+  public initialized = false;
 
   init(dmmf: any, suffix: string) {
-    if (this.initialized) return;
+    if (this.initialized || !dmmf) return;
     this.parse(dmmf, suffix);
     this.initialized = true;
   }
