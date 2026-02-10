@@ -1,15 +1,12 @@
 import { Prisma as PrismaExtension } from "@prisma/client/extension";
-import { Prisma as Prisma } from "@prisma/client";
+import { BaseDMMF } from "@prisma/client/runtime/library";
 import { deepHijackResult, deepInjectSalt, deepTransformInput } from "./logic";
 import { SaltIdsOptions } from "./types";
 import { ModelRegistry, SaltIdsHelper } from "./utils";
 
-export { SaltIdsOptions, SaltIdsHelper };
+export { SaltIdsHelper, SaltIdsOptions };
 
-export const saltIdsExtension = (
-  options: SaltIdsOptions,
-  dmmf?: typeof Prisma.dmmf,
-) => {
+export const saltIdsExtension = (options?: SaltIdsOptions, dmmf?: BaseDMMF) => {
   const config: Required<SaltIdsOptions> = {
     saltLength: options?.saltLength ?? 4,
     saltSuffix: options?.saltSuffix ?? "Salt",
@@ -25,7 +22,14 @@ export const saltIdsExtension = (
           async $allOperations({ model, operation, args, query }) {
             // Ensure registry is initialized
             if (!registry.initialized) {
-              registry.init(dmmf || Prisma.dmmf, config.saltSuffix);
+              const dmmf1 = dmmf ?? extractDmmfFromClient(client);
+              if (!dmmf1) {
+                throw new Error(
+                  "prisma-extension-saltids: Could not extract DMMF from client. " +
+                    "Please pass dmmf explicitly: saltIdsExtension({}, dmmf: Prisma.dmmf)",
+                );
+              }
+              registry.init(dmmf1, config.saltSuffix);
             }
 
             // ------------------------------------------------
@@ -119,3 +123,30 @@ export const saltIdsExtension = (
     });
   });
 };
+
+/**
+ * Extract DMMF from Prisma client instance
+ */
+function extractDmmfFromClient(client: any): BaseDMMF | null {
+  // Try to get from _runtimeDataModel (Prisma 7+)
+  if (client._runtimeDataModel) {
+    return {
+      datamodel: {
+        models: Object.entries(client._runtimeDataModel.models).map(
+          ([name, model]: [string, any]) => ({
+            name,
+            fields: model.fields || [],
+            uniqueFields: model.uniqueFields || [],
+            uniqueIndexes: model.uniqueIndexes || [],
+            primaryKey: model.primaryKey,
+            dbName: model.dbName ?? null,
+            schema: model.schema ?? null,
+          }),
+        ),
+        enums: [],
+        types: [],
+      },
+    };
+  }
+  return null;
+}
