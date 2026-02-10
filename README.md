@@ -1,5 +1,11 @@
 # prisma-extension-saltids
 
+[![npm version](https://img.shields.io/npm/v/prisma-extension-saltids.svg?style=flat)](https://www.npmjs.com/package/prisma-extension-saltids)
+[![License](https://img.shields.io/npm/l/prisma-extension-saltids.svg?style=flat)](https://github.com/pond918/prisma-extension-saltids/blob/main/LICENSE)
+[![Downloads](https://img.shields.io/npm/dm/prisma-extension-saltids.svg?style=flat)](https://www.npmjs.com/package/prisma-extension-saltids)
+[![TypeScript](https://img.shields.io/badge/%3C%2F%3E-TypeScript-%230074C1.svg)](http://www.typescriptlang.org/)
+
+
 [English](#english) | [中文说明](#chinese)
 
 <a name="english"></a>
