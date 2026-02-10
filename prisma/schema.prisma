@@ -28,10 +28,10 @@ model Post {
     title String
 
     // 3. 外键关联字段 (遵循 xxxId + xxxIdSalt 规范)
-    authorId     Int
+    authorId     Int?
     authorIdSalt Int?
 
-    author User @relation(fields: [authorId], references: [id])
+    author User? @relation(fields: [authorId], references: [id])
 
     @@index([authorId])
 }

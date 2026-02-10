@@ -13,10 +13,9 @@ describe("Prisma Extension SaltIDs", () => {
       saltIdsExtension({
         saltLength: 3,
         saltSuffix: "Salt",
-      })
+      }),
     );
   };
-
 
   beforeAll(async () => {
     prisma = createClient();
@@ -78,11 +77,11 @@ describe("Prisma Extension SaltIDs", () => {
     });
     console.log("Created Post:", JSON.stringify(postWithAuthor));
 
-    expect(postWithAuthor?.author.id).toBe(user.id);
+    expect(postWithAuthor?.author?.id).toBe(user.id);
     expect(postWithAuthor?.authorIdSalt).toBe(user.idSalt);
 
     const foundAuthor = await prisma.user.findUnique({
-      where: { id: postWithAuthor?.authorId },
+      where: { id: postWithAuthor?.authorId! },
     });
     expect(foundAuthor?.id).toBe(user.id);
   });
@@ -95,5 +94,23 @@ describe("Prisma Extension SaltIDs", () => {
 
     expect(parsed.id).toBe(user.id);
     expect(parsed.idSalt).toBeUndefined();
+  });
+
+  it("5. Nullable: Should hide salt field when base field is null", async () => {
+    const post = await prisma.post.create({
+      data: {
+        title: "Orphan Post",
+      },
+    });
+
+    expect(post).toBeDefined();
+    expect(post.authorId).toBeNull();
+
+    // Verify hiding mechanism
+    const json = JSON.parse(JSON.stringify(post));
+    expect(json.authorIdSalt).toBeUndefined();
+
+    // Check enumerability directly
+    expect(Object.keys(post)).not.toContain("authorIdSalt");
   });
 });

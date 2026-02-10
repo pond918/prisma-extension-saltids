@@ -10,7 +10,7 @@ export function deepTransformInput(
   obj: any,
   modelName: string,
   registry: ModelRegistry,
-  options: Required<SaltIdsOptions>
+  options: Required<SaltIdsOptions>,
 ): { didTransformId: boolean } {
   let didTransformId = false;
 
@@ -80,14 +80,14 @@ export function deepInjectSalt(
   modelName: string,
   registry: ModelRegistry,
   options: Required<SaltIdsOptions>,
-  skipRootInjection = false
+  skipRootInjection = false,
 ) {
   if (!data || typeof data !== "object") return;
   if (!modelName) return;
 
   if (Array.isArray(data)) {
     data.forEach((item) =>
-      deepInjectSalt(item, modelName, registry, options, skipRootInjection)
+      deepInjectSalt(item, modelName, registry, options, skipRootInjection),
     );
     return;
   }
@@ -126,7 +126,7 @@ export function deepInjectSalt(
             targetModel,
             registry,
             options,
-            false
+            false,
           );
         }
         if (val.connectOrCreate && val.connectOrCreate.create) {
@@ -135,7 +135,7 @@ export function deepInjectSalt(
             targetModel,
             registry,
             options,
-            false
+            false,
           );
         }
         if (val.upsert && val.upsert.create) {
@@ -144,7 +144,7 @@ export function deepInjectSalt(
             targetModel,
             registry,
             options,
-            false
+            false,
           );
         }
         // Note: 'update' usually takes 'data', which might need injection if we allow updating ID?
@@ -158,11 +158,18 @@ export function deepInjectSalt(
 // 2. 结果劫持 (Result Hijacking)
 // -----------------------------------------------------------------------------
 // 逻辑：保持原样，利用后缀匹配来隐藏 Salt 并劫持 Getter
-export function deepHijackResult(data: any, options: Required<SaltIdsOptions>) {
+export function deepHijackResult(
+  data: any,
+  options: Required<SaltIdsOptions>,
+  modelName?: string,
+  registry?: ModelRegistry,
+) {
   if (!data || typeof data !== "object") return;
 
   if (Array.isArray(data)) {
-    data.forEach((item) => deepHijackResult(item, options));
+    data.forEach((item) =>
+      deepHijackResult(item, options, modelName, registry),
+    );
     return;
   }
 
@@ -170,37 +177,66 @@ export function deepHijackResult(data: any, options: Required<SaltIdsOptions>) {
   for (const key of keys) {
     if (key.endsWith(options.saltSuffix)) {
       const saltVal = data[key];
-      if (typeof saltVal === "number") {
-        const baseKey = key.slice(0, -options.saltSuffix.length);
-        const baseVal = data[baseKey];
+      const baseKey = key.slice(0, -options.saltSuffix.length);
+      const baseVal = data[baseKey];
 
-        if (typeof baseVal === "number") {
-          // 1. Hide Salt
-          Object.defineProperty(data, key, {
-            enumerable: false,
-            value: saltVal,
-            writable: true,
-            configurable: true,
-          });
-
-          // 2. Hijack Base ID
-          Object.defineProperty(data, baseKey, {
-            enumerable: true,
-            configurable: true,
-            get() {
-              return SaltIdsHelper.encode(baseVal, saltVal, options.saltLength);
-            },
-            set(v) {
-              // no-op
-            },
-          });
+      // 0. Safety Check: Verify against registry to avoid false positives (e.g. inside JSON)
+      let shouldHijack = true;
+      if (registry) {
+        if (!modelName) {
+          // Case: Lost model context (e.g. inside JSON), stop hijacking
+          shouldHijack = false;
+        } else {
+          // Case: Have model context, verify if this is a known salt field
+          const saltFields = registry.getSaltFields(modelName);
+          shouldHijack = saltFields.some(
+            (f) => f.base === baseKey && f.salt === key,
+          );
         }
+      }
+
+      if (
+        shouldHijack &&
+        typeof saltVal === "number" &&
+        typeof baseVal === "number"
+      ) {
+        // 1. Hide Salt
+        Object.defineProperty(data, key, {
+          enumerable: false,
+          value: saltVal,
+          writable: true,
+          configurable: true,
+        });
+
+        // 2. Hijack Base ID
+        Object.defineProperty(data, baseKey, {
+          enumerable: true,
+          configurable: true,
+          get() {
+            return SaltIdsHelper.encode(baseVal, saltVal, options.saltLength);
+          },
+          set(v) {
+            // no-op
+          },
+        });
+      } else if (shouldHijack && baseVal === null) {
+        Object.defineProperty(data, key, {
+          enumerable: false,
+          value: null,
+          writable: true,
+          configurable: true,
+        });
       }
     }
 
     const val = data[key];
     if (typeof val === "object" && val !== null && !(val instanceof Date)) {
-      deepHijackResult(val, options);
+      let nextModel: string | undefined;
+      if (registry && modelName) {
+        const relation = registry.getRelation(modelName, key);
+        if (relation) nextModel = relation.type;
+      }
+      deepHijackResult(val, options, nextModel, registry);
     }
   }
 }

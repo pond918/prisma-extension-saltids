@@ -107,6 +107,11 @@ const found = await prisma.user.findUnique({
 // Utilizing the primary key index!
 ```
 
+### 6. ⚠️ Limitation
+
+By default, the extension identifies fields matching the pattern `xxx` and `xxxSalt` as salted fields. Please be mindful of this naming convention when defining your schema.
+
+
 ---
 
 <a name="chinese"></a>
@@ -208,3 +213,7 @@ const found = await prisma.user.findUnique({
 });
 // 插件会自动拆解成 where: { id: 1, idSalt: 582 }，利用主键索引！
 ```
+
+#### 6. ⚠️ 限制
+
+默认会把 `xxx` + `xxxSalt` 识别成加盐字段，故字段定义时需注意。

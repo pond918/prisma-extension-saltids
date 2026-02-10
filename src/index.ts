@@ -113,7 +113,7 @@ export const saltIdsExtension = (options?: SaltIdsOptions, dmmf?: BaseDMMF) => {
             // 4. 结果劫持 (隐藏 Salt，暴露 SaltID)
             // ------------------------------------------------
             if (result) {
-              deepHijackResult(result, config);
+              deepHijackResult(result, config, model, registry);
             }
 
             return result;
