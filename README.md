@@ -60,7 +60,32 @@ const prisma = new PrismaClient().$extends(
 );
 ```
 
-### 4. Enjoy!
+### 4. Foreign Keys
+
+Foreign keys work as usual; simply add a corresponding salt field for the foreign key.
+
+```prisma
+model Post {
+  id     Int @id @default(autoincrement())
+  idSalt Int
+
+  authorId     Int // Foreign Key as usual
+  authorIdSalt Int? // Just add one line!
+  author       User @relation(fields: [authorId], references: [id])
+
+  @@index([authorId]) // Index works as usual, no need to add Salt
+}
+```
+
+```typescript
+// Query by foreign key automatically works
+const posts = await prisma.post.findMany({
+  where: { authorId: user.id } // Pass the public ID (e.g. 5821)
+});
+// Automatically transforms to: where: { authorId: 1, authorIdSalt: 582 }
+```
+
+### 5. Enjoy!
 
 Write code as usual, IDs are automatically obfuscated:
 
@@ -138,7 +163,32 @@ const prisma = new PrismaClient().$extends(
 );
 ```
 
-#### 4. 爽！
+#### 4. 外键支持
+
+外键也跟平时一样，只需要给外键加个 Salt 字段即可。
+
+```prisma
+model Post {
+  id     Int @id @default(autoincrement())
+  idSalt Int
+
+  authorId     Int // 外键跟平时一样
+  authorIdSalt Int? // 只需要加一行这个就够了！
+  author       User @relation(fields: [authorId], references: [id])
+
+  @@index([authorId]) // 索引跟平时一样，不需要加 Salt
+}
+```
+
+```typescript
+// 直接使用混淆后的 ID 进行查询
+const posts = await prisma.post.findMany({
+  where: { authorId: user.id } // 传入混淆 ID
+});
+// 自动转换为: where: { authorId: 1, authorIdSalt: 582 }
+```
+
+#### 5. 爽！
 
 像平常一样写代码，ID 自动混淆：
 
