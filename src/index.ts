@@ -3,6 +3,8 @@ import { BaseDMMF } from "@prisma/client/runtime/library";
 import { deepHijackResult, deepInjectSalt, deepTransformInput } from "./logic";
 import { SaltIdsOptions } from "./types";
 import { ModelRegistry, SaltIdsHelper } from "./utils";
+import { saltIdsSql } from "./raw";
+export { saltIdsSql, SaltIdsColumnRef } from "./raw";
 
 export { SaltIdsHelper, SaltIdsOptions };
 
@@ -10,14 +12,29 @@ export const saltIdsExtension = (options?: SaltIdsOptions, dmmf?: BaseDMMF) => {
   const config: Required<SaltIdsOptions> = {
     saltLength: options?.saltLength ?? 4,
     saltSuffix: options?.saltSuffix ?? "Salt",
+    rawResultHijack: options?.rawResultHijack ?? true,
   };
 
   const registry = new ModelRegistry();
+  const raw = saltIdsSql(config);
 
   return PrismaExtension.defineExtension((client) => {
     return client.$extends({
       name: "prisma-extension-saltids",
+      client: {
+        $saltIds: raw,
+      },
       query: {
+        async $queryRaw({ args, query }) {
+          const result = await query(args);
+          if (config.rawResultHijack) raw.resultScan(result);
+          return result;
+        },
+        async $queryRawUnsafe({ args, query }) {
+          const result = await query(args);
+          if (config.rawResultHijack) raw.resultScan(result);
+          return result;
+        },
         $allModels: {
           async $allOperations({ model, operation, args, query }) {
             // Ensure registry is initialized
@@ -26,7 +43,7 @@ export const saltIdsExtension = (options?: SaltIdsOptions, dmmf?: BaseDMMF) => {
               if (!dmmf1) {
                 throw new Error(
                   "prisma-extension-saltids: Could not extract DMMF from client. " +
-                    "Please pass dmmf explicitly: saltIdsExtension({}, dmmf: Prisma.dmmf)",
+                    "Please pass dmmf explicitly: saltIdsExtension({}, Prisma.dmmf)"
                 );
               }
               registry.init(dmmf1, config.saltSuffix);
@@ -47,16 +64,12 @@ export const saltIdsExtension = (options?: SaltIdsOptions, dmmf?: BaseDMMF) => {
             // 2. 自动生成 Salt (Auto Generate Salt)
             // ------------------------------------------------
             if (operation === "create" || operation === "createMany") {
-              if (args.data)
-                deepInjectSalt(args.data, model, registry, config, false);
+              if (args.data) deepInjectSalt(args.data, model, registry, config, false);
             } else if (operation === "update" || operation === "updateMany") {
-              if (args.data)
-                deepInjectSalt(args.data, model, registry, config, true);
+              if (args.data) deepInjectSalt(args.data, model, registry, config, true);
             } else if (operation === "upsert") {
-              if (args.create)
-                deepInjectSalt(args.create, model, registry, config, false);
-              if (args.update)
-                deepInjectSalt(args.update, model, registry, config, true);
+              if (args.create) deepInjectSalt(args.create, model, registry, config, false);
+              if (args.update) deepInjectSalt(args.update, model, registry, config, true);
             }
 
             // ------------------------------------------------
@@ -128,21 +141,22 @@ export const saltIdsExtension = (options?: SaltIdsOptions, dmmf?: BaseDMMF) => {
  * Extract DMMF from Prisma client instance
  */
 function extractDmmfFromClient(client: any): BaseDMMF | null {
+  if (client?._dmmf?.datamodel?.models) return client._dmmf as BaseDMMF;
+  if (client?._engineConfig?.dmmf?.datamodel?.models) return client._engineConfig.dmmf as BaseDMMF;
+
   // Try to get from _runtimeDataModel (Prisma 7+)
   if (client._runtimeDataModel) {
     return {
       datamodel: {
-        models: Object.entries(client._runtimeDataModel.models).map(
-          ([name, model]: [string, any]) => ({
-            name,
-            fields: model.fields || [],
-            uniqueFields: model.uniqueFields || [],
-            uniqueIndexes: model.uniqueIndexes || [],
-            primaryKey: model.primaryKey,
-            dbName: model.dbName ?? null,
-            schema: model.schema ?? null,
-          }),
-        ),
+        models: Object.entries(client._runtimeDataModel.models).map(([name, model]: [string, any]) => ({
+          name,
+          fields: model.fields || [],
+          uniqueFields: model.uniqueFields || [],
+          uniqueIndexes: model.uniqueIndexes || [],
+          primaryKey: model.primaryKey,
+          dbName: model.dbName ?? null,
+          schema: model.schema ?? null,
+        })),
         enums: [],
         types: [],
       },

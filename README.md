@@ -5,7 +5,6 @@
 [![Downloads](https://img.shields.io/npm/dm/prisma-extension-saltids.svg?style=flat)](https://www.npmjs.com/package/prisma-extension-saltids)
 [![TypeScript](https://img.shields.io/badge/%3C%2F%3E-TypeScript-%230074C1.svg)](http://www.typescriptlang.org/)
 
-
 [English](#english) | [中文说明](#chinese)
 
 <a name="english"></a>
@@ -23,9 +22,9 @@ In your code, you only deal with this public ID. In the database, it remains a h
 1.  🛡️ **Anti-Scraping / Enumeration Protection**: prevents others from guessing your data volume by traversing IDs like `user/1`, `user/2`.
 2.  ⚡ **High Performance**: underlying checks still use the database's `Int` primary key index. Extremely fast queries with no need for additional string indexes (like UUIDs).
 3.  🪄 **Zero Intrusion**:
-    *   **Read**: `user.id` is automatically transformed into the public ID.
-    *   **Write**: When saving to relation tables, the public ID is automatically unpacked into `xxx` and `xxxSalt` fields.
-    *   **Query**: `findUnique({ where: { id: PublicID } })` is automatically handled.
+    - **Read**: `user.id` is automatically transformed into the public ID.
+    - **Write**: When saving to relation tables, the public ID is automatically unpacked into `xxx` and `xxxSalt` fields.
+    - **Query**: `findUnique({ where: { id: PublicID } })` is automatically handled.
 4.  🔢 **Pure Integer**: The generated ID is still a number (`BigInt` or `Int`), making it URL-friendly and shorter than UUIDs.
 
 ## How to use?
@@ -50,8 +49,8 @@ model User {
 ### 3. Register Extension
 
 ```typescript
-import { PrismaClient } from '@prisma/client';
-import { saltIdsExtension } from 'prisma-extension-saltids';
+import { PrismaClient } from "@prisma/client";
+import { saltIdsExtension } from "prisma-extension-saltids";
 
 const prisma = new PrismaClient().$extends(
   saltIdsExtension({
@@ -80,7 +79,7 @@ model Post {
 ```typescript
 // Query by foreign key automatically works
 const posts = await prisma.post.findMany({
-  where: { authorId: user.id } // Pass the public ID (e.g. 5821)
+  where: { authorId: user.id }, // Pass the public ID (e.g. 5821)
 });
 // Automatically transforms to: where: { authorId: 1, authorIdSalt: 582 }
 ```
@@ -92,25 +91,66 @@ Write code as usual, IDs are automatically obfuscated:
 ```typescript
 // Create: Just pass data, ID and Salt are auto-generated
 const user = await prisma.user.create({
-  data: { name: 'Geek' }
+  data: { name: "Geek" },
 });
 
-console.log(user.id); 
+console.log(user.id);
 // Output: 5821 (Assuming DB id=1, salt=582)
 // Only you know how it's composed; externally it's just a random number.
 
 // Query: directly use the public ID
 const found = await prisma.user.findUnique({
-  where: { id: user.id } // Pass in 5821
+  where: { id: user.id }, // Pass in 5821
 });
 // The plugin automatically unpacks it to: where: { id: 1, idSalt: 582 }
 // Utilizing the primary key index!
 ```
 
-### 6. ⚠️ Limitation
+### 6. Raw SQL ($queryRaw / $executeRaw)
+
+Raw SQL has no model/field context, so this package does not try to "guess" and auto-decode numbers in raw queries.
+
+Use `prisma.$saltIds` to build safe SQL fragments with explicit column references (supports table alias).
+
+If your SELECT returns `xxx` and `xxxSalt` (column aliases should follow your configured `saltSuffix`), the extension will automatically:
+
+- hide `xxxSalt` (non-enumerable)
+- expose `xxx` as the public SaltID (getter)
+
+```ts
+import { PrismaClient } from "@prisma/client";
+import { saltIdsExtension } from "prisma-extension-saltids";
+
+const prisma = new PrismaClient().$extends(saltIdsExtension({ saltLength: 3, saltSuffix: "Salt" }));
+const s = prisma.$saltIds;
+
+const user = await prisma.user.create({ data: { name: "RawUser" } });
+
+const uId = s.col("u", "id");
+const whereEq = s.where.eq(uId, user.id);
+
+const rows = await prisma.$queryRaw`
+  SELECT u."id", u."idSalt", u."name"
+  FROM "User" u
+  WHERE ${whereEq}
+`;
+```
+
+Unsafe positional example:
+
+```ts
+const frag = s.where.eq(s.col("User", "id"), user.id);
+const u = s.toUnsafe(frag);
+const rows = await prisma.$queryRawUnsafe(`SELECT id FROM "User" WHERE ${u.sql}`, ...u.values);
+```
+
+Range comparisons:
+
+- `gtFromSaltId / ltFromSaltId / betweenFromSaltIds` compare by decoded `realId` only (salt cannot be validated for range queries).
+
+### 7. ⚠️ Limitation
 
 By default, the extension identifies fields matching the pattern `xxx` and `xxxSalt` as salted fields. Please be mindful of this naming convention when defining your schema.
-
 
 ---
 
@@ -131,9 +171,9 @@ By default, the extension identifies fields matching the pattern `xxx` and `xxxS
 1.  🛡️ **防爬虫/防遍历**：别人无法通过 `user/1`、`user/2` 这种规律猜测你的数据量。
 2.  ⚡ **高性能**：底层依然使用数据库的 `Int` 主键索引，查询速度极快，不需要额外的字符串索引。
 3.  🪄 **零侵入**：
-    *   **读**：`user.id` 自动变成混淆 ID。
-    *   **写**：存入关联表时，自动拆解混淆 ID 存入 `xxx` 和 `xxxSalt` 两个字段。
-    *   **查**：`findUnique({ where: { id: 混淆ID } })` 自动处理。
+    - **读**：`user.id` 自动变成混淆 ID。
+    - **写**：存入关联表时，自动拆解混淆 ID 存入 `xxx` 和 `xxxSalt` 两个字段。
+    - **查**：`findUnique({ where: { id: 混淆ID } })` 自动处理。
 4.  🔢 **纯整型**：生成的 ID 依然是数字（`BigInt` 或 `Int`），适合用于 URL 和 JSON，比 UUID 更短更友好。
 
 ### 怎么用？
@@ -158,8 +198,8 @@ model User {
 #### 3. 注册扩展
 
 ```typescript
-import { PrismaClient } from '@prisma/client';
-import { saltIdsExtension } from 'prisma-extension-saltids';
+import { PrismaClient } from "@prisma/client";
+import { saltIdsExtension } from "prisma-extension-saltids";
 
 const prisma = new PrismaClient().$extends(
   saltIdsExtension({
@@ -188,7 +228,7 @@ model Post {
 ```typescript
 // 直接使用混淆后的 ID 进行查询
 const posts = await prisma.post.findMany({
-  where: { authorId: user.id } // 传入混淆 ID
+  where: { authorId: user.id }, // 传入混淆 ID
 });
 // 自动转换为: where: { authorId: 1, authorIdSalt: 582 }
 ```
@@ -200,20 +240,62 @@ const posts = await prisma.post.findMany({
 ```typescript
 // 创建：只需传入数据，ID 和 Salt 自动生成
 const user = await prisma.user.create({
-  data: { name: 'Geek' }
+  data: { name: "Geek" },
 });
 
-console.log(user.id); 
+console.log(user.id);
 // 输出: 5821 (假设 DB id=1, salt=582)
 // 只有你知道它是怎么拼出来的，外部看到的就是一个随机数
 
 // 查询：直接用混淆后的 ID 查
 const found = await prisma.user.findUnique({
-  where: { id: user.id } // 传入 5821
+  where: { id: user.id }, // 传入 5821
 });
 // 插件会自动拆解成 where: { id: 1, idSalt: 582 }，利用主键索引！
 ```
 
-#### 6. ⚠️ 限制
+#### 6. Raw SQL ($queryRaw / $executeRaw)
+
+Raw SQL 没有模型/字段上下文，因此本包不会在 raw 里“猜测”某个数字是否是 SaltID 并自动拆解。
+
+请使用 `prisma.$saltIds` 生成严谨的 SQL 片段（支持表别名）。
+
+只要 SELECT 返回 `xxx` 与 `xxxSalt`（列别名遵循配置的 `saltSuffix`），扩展会自动：
+
+- 隐藏 `xxxSalt`（不可枚举）
+- 把 `xxx` 映射成对外 SaltID（getter）
+
+```ts
+import { PrismaClient } from "@prisma/client";
+import { saltIdsExtension } from "prisma-extension-saltids";
+
+const prisma = new PrismaClient().$extends(saltIdsExtension({ saltLength: 3, saltSuffix: "Salt" }));
+const s = prisma.$saltIds;
+
+const user = await prisma.user.create({ data: { name: "RawUser" } });
+
+const uId = s.col("u", "id");
+const whereEq = s.where.eq(uId, user.id);
+
+const rows = await prisma.$queryRaw`
+  SELECT u."id", u."idSalt", u."name"
+  FROM "User" u
+  WHERE ${whereEq}
+`;
+```
+
+Unsafe positional 示例：
+
+```ts
+const frag = s.where.eq(s.col("User", "id"), user.id);
+const u = s.toUnsafe(frag);
+const rows = await prisma.$queryRawUnsafe(`SELECT id FROM "User" WHERE ${u.sql}`, ...u.values);
+```
+
+范围比较：
+
+- `gtFromSaltId / ltFromSaltId / betweenFromSaltIds` 仅比较解码后的 `realId`（范围查询无法做 salt 校验）。
+
+#### 7. ⚠️ 限制
 
 默认会把 `xxx` + `xxxSalt` 识别成加盐字段，故字段定义时需注意。

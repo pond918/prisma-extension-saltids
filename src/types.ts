@@ -9,5 +9,6 @@ export interface SaltIdsOptions {
    * 例如: userId -> userSalt
    */
   saltSuffix?: string;
-  
+
+  rawResultHijack?: boolean;
 }

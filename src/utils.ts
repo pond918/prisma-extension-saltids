@@ -55,6 +55,8 @@ export class SaltIdsHelper {
 export interface SaltField {
   base: string;
   salt: string;
+  hasDefaultValue: boolean; // 标识 base 字段是否有默认值（autoincrement 或其他 @default）
+  saltHasDefaultValue: boolean; // 标识 salt 字段是否也有默认值
 }
 
 export interface RelationField {
@@ -81,11 +83,13 @@ export class ModelRegistry {
       const validSalts: SaltField[] = [];
       const relationMap = new Map<string, RelationField>();
 
-      // 1. Map all Int fields
-      const intFields = new Set<string>();
+      // 1. Map all Int fields with their metadata
+      const intFieldsMap = new Map<string, { hasDefaultValue: boolean }>();
       fields.forEach((f) => {
         if (f.kind === "scalar" && f.type === "Int") {
-          intFields.add(f.name);
+          intFieldsMap.set(f.name, {
+            hasDefaultValue: f.hasDefaultValue || false,
+          });
         }
         if (f.kind === "object") {
           relationMap.set(f.name, {
@@ -97,13 +101,19 @@ export class ModelRegistry {
       });
 
       // 2. Find Pairs
-      intFields.forEach((fieldName) => {
+      intFieldsMap.forEach((metadata, fieldName) => {
         // assumption: base field "xxx", salt field "xxxSalt" (if suffix is "Salt")
         // Check if this field could be a base?
         // If "postPk" exists, check if "postPkSalt" exists.
         const potentialSaltName = `${fieldName}${suffix}`;
-        if (intFields.has(potentialSaltName)) {
-          validSalts.push({ base: fieldName, salt: potentialSaltName });
+        const saltMetadata = intFieldsMap.get(potentialSaltName);
+        if (saltMetadata) {
+          validSalts.push({
+            base: fieldName,
+            salt: potentialSaltName,
+            hasDefaultValue: metadata.hasDefaultValue,
+            saltHasDefaultValue: saltMetadata.hasDefaultValue,
+          });
         }
       });
 

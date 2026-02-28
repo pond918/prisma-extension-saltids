@@ -16,8 +16,9 @@ model User {
     // Code will generate this
     idSalt Int?
 
-    name  String?
-    posts Post[]
+    name     String?
+    posts    Post[]
+    products Product[]
 }
 
 model Post {
@@ -34,4 +35,19 @@ model Post {
     author User? @relation(fields: [authorId], references: [id])
 
     @@index([authorId])
+}
+
+// Test model for optional fields without default values
+model Product {
+    id     Int  @id @default(autoincrement())
+    idSalt Int?
+
+    name String
+
+    // Optional foreign key WITHOUT default value (user may not provide)
+    ownerId     Int?
+    ownerIdSalt Int?
+    owner       User? @relation(fields: [ownerId], references: [id])
+
+    @@index([ownerId])
 }
