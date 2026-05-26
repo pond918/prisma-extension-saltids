@@ -13,7 +13,11 @@ Make your Prisma primary key IDs **Scrape-Proof**, **Secure**, **High-Performanc
 
 ## What is it?
 
-It transparently combines a database `Auto-Increment ID` (e.g., `1`) with a `Random Salt` (e.g., `123`) into a single **Public Obfuscated ID** (e.g., `1231`).
+It transparently combines a database `Auto-Increment ID` (e.g., `1`) with a `Random Salt` (e.g., `582`) into a single **Public Obfuscated ID** (e.g., `1582`) using pure arithmetic encoding:
+
+```
+saltId = sign(realId) * (abs(realId) * 10^saltLen + salt)
+```
 
 In your code, you only deal with this public ID. In the database, it remains a highly efficient auto-increment integer primary key.
 
@@ -54,7 +58,7 @@ import { saltIdsExtension } from "prisma-extension-saltids";
 
 const prisma = new PrismaClient().$extends(
   saltIdsExtension({
-    saltLength: 3, // Salt length, e.g., 3 digits
+    saltLength: 3, // Salt length, e.g., 3 digits → salt range [0, 999]
   })
 );
 ```
@@ -79,7 +83,7 @@ model Post {
 ```typescript
 // Query by foreign key automatically works
 const posts = await prisma.post.findMany({
-  where: { authorId: user.id }, // Pass the public ID (e.g. 5821)
+  where: { authorId: user.id }, // Pass the public ID (e.g. 1582)
 });
 // Automatically transforms to: where: { authorId: 1, authorIdSalt: 582 }
 ```
@@ -95,12 +99,13 @@ const user = await prisma.user.create({
 });
 
 console.log(user.id);
-// Output: 5821 (Assuming DB id=1, salt=582)
+// Output: 1582 (Assuming DB id=1, salt=582, saltLen=3)
+// Formula: 1 * 10^3 + 582 = 1582
 // Only you know how it's composed; externally it's just a random number.
 
 // Query: directly use the public ID
 const found = await prisma.user.findUnique({
-  where: { id: user.id }, // Pass in 5821
+  where: { id: user.id }, // Pass in 1582
 });
 // The plugin automatically unpacks it to: where: { id: 1, idSalt: 582 }
 // Utilizing the primary key index!
@@ -162,7 +167,13 @@ By default, the extension identifies fields matching the pattern `xxx` and `xxxS
 
 ### 它是干什么的？
 
-它可以把数据库里的 `自增 ID` (比如 `1`) 和一个 `随机盐值` (比如 `123`) 自动合并成一个 **对外的混淆 ID** (比如 `1231` )。
+它可以把数据库里的 `自增 ID` (比如 `1`) 和一个 `随机盐值` (比如 `582`) 自动合并成一个 **对外的混淆 ID** (比如 `1582` )。
+
+编码公式（纯算术，无字符串拼接）：
+
+```
+saltId = sign(realId) * (abs(realId) * 10^saltLen + salt)
+```
 
 在你的代码里，你只需要处理这个混淆后的 ID，而在数据库里，它依然是高效的整型自增主键。
 
@@ -203,7 +214,7 @@ import { saltIdsExtension } from "prisma-extension-saltids";
 
 const prisma = new PrismaClient().$extends(
   saltIdsExtension({
-    saltLength: 3, // 盐值长度，比如 3 位
+    saltLength: 3, // 盐值长度，比如 3 位 → salt 取值范围 [0, 999]
   })
 );
 ```
@@ -228,7 +239,7 @@ model Post {
 ```typescript
 // 直接使用混淆后的 ID 进行查询
 const posts = await prisma.post.findMany({
-  where: { authorId: user.id }, // 传入混淆 ID
+  where: { authorId: user.id }, // 传入混淆 ID（如 1582）
 });
 // 自动转换为: where: { authorId: 1, authorIdSalt: 582 }
 ```
@@ -244,19 +255,20 @@ const user = await prisma.user.create({
 });
 
 console.log(user.id);
-// 输出: 5821 (假设 DB id=1, salt=582)
+// 输出: 1582 (假设 DB id=1, salt=582, saltLen=3)
+// 公式: 1 * 10^3 + 582 = 1582
 // 只有你知道它是怎么拼出来的，外部看到的就是一个随机数
 
 // 查询：直接用混淆后的 ID 查
 const found = await prisma.user.findUnique({
-  where: { id: user.id }, // 传入 5821
+  where: { id: user.id }, // 传入 1582
 });
 // 插件会自动拆解成 where: { id: 1, idSalt: 582 }，利用主键索引！
 ```
 
 #### 6. Raw SQL ($queryRaw / $executeRaw)
 
-Raw SQL 没有模型/字段上下文，因此本包不会在 raw 里“猜测”某个数字是否是 SaltID 并自动拆解。
+Raw SQL 没有模型/字段上下文，因此本包不会在 raw 里"猜测"某个数字是否是 SaltID 并自动拆解。
 
 请使用 `prisma.$saltIds` 生成严谨的 SQL 片段（支持表别名）。
 

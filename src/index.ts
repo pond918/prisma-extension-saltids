@@ -1,17 +1,17 @@
-import { Prisma as PrismaExtension } from "@prisma/client/extension";
-import { BaseDMMF } from "@prisma/client/runtime/library";
-import { deepHijackResult, deepInjectSalt, deepTransformInput } from "./logic";
-import { SaltIdsOptions } from "./types";
-import { ModelRegistry, SaltIdsHelper } from "./utils";
-import { saltIdsSql } from "./raw";
-export { saltIdsSql, SaltIdsColumnRef } from "./raw";
+import { Prisma as PrismaExtension } from '@prisma/client/extension';
+import { BaseDMMF } from '@prisma/client/runtime/library';
+import { deepHijackResult, deepInjectSalt, deepTransformInput } from './logic';
+import { saltIdsSql } from './raw';
+import { SaltIdsOptions } from './types';
+import { ModelRegistry, SaltIdsHelper } from './utils';
+export { SaltIdsColumnRef, saltIdsSql } from './raw';
 
 export { SaltIdsHelper, SaltIdsOptions };
 
 export const saltIdsExtension = (options?: SaltIdsOptions, dmmf?: BaseDMMF) => {
   const config: Required<SaltIdsOptions> = {
     saltLength: options?.saltLength ?? 4,
-    saltSuffix: options?.saltSuffix ?? "Salt",
+    saltSuffix: options?.saltSuffix ?? 'Salt',
     rawResultHijack: options?.rawResultHijack ?? true,
   };
 
@@ -20,7 +20,7 @@ export const saltIdsExtension = (options?: SaltIdsOptions, dmmf?: BaseDMMF) => {
 
   return PrismaExtension.defineExtension((client) => {
     return client.$extends({
-      name: "prisma-extension-saltids",
+      name: 'prisma-extension-saltids',
       client: {
         $saltIds: raw,
       },
@@ -42,8 +42,8 @@ export const saltIdsExtension = (options?: SaltIdsOptions, dmmf?: BaseDMMF) => {
               const dmmf1 = dmmf ?? extractDmmfFromClient(client);
               if (!dmmf1) {
                 throw new Error(
-                  "prisma-extension-saltids: Could not extract DMMF from client. " +
-                    "Please pass dmmf explicitly: saltIdsExtension({}, Prisma.dmmf)"
+                  'prisma-extension-saltids: Could not extract DMMF from client. ' +
+                    'Please pass dmmf explicitly: saltIdsExtension({}, Prisma.dmmf)'
                 );
               }
               registry.init(dmmf1, config.saltSuffix);
@@ -63,11 +63,11 @@ export const saltIdsExtension = (options?: SaltIdsOptions, dmmf?: BaseDMMF) => {
             // ------------------------------------------------
             // 2. 自动生成 Salt (Auto Generate Salt)
             // ------------------------------------------------
-            if (operation === "create" || operation === "createMany") {
+            if (operation === 'create' || operation === 'createMany') {
               if (args.data) deepInjectSalt(args.data, model, registry, config, false);
-            } else if (operation === "update" || operation === "updateMany") {
+            } else if (operation === 'update' || operation === 'updateMany') {
               if (args.data) deepInjectSalt(args.data, model, registry, config, true);
-            } else if (operation === "upsert") {
+            } else if (operation === 'upsert') {
               if (args.create) deepInjectSalt(args.create, model, registry, config, false);
               if (args.update) deepInjectSalt(args.update, model, registry, config, true);
             }
@@ -77,22 +77,50 @@ export const saltIdsExtension = (options?: SaltIdsOptions, dmmf?: BaseDMMF) => {
             // ------------------------------------------------
             let result: any;
 
+            // Auto-ensure salt fields are selected for read operations
+            const readOperations = ['findUnique', 'findFirst', 'findMany', 'update', 'upsert'];
+            if (readOperations.includes(operation) && args.select) {
+              const saltFields = registry.getSaltFields(model);
+              console.log(
+                `[saltids] Auto-adding salt fields for ${model}.${operation}:`,
+                saltFields.map((f) => f.salt)
+              );
+              console.log(`[saltids] args.select keys:`, Object.keys(args.select));
+
+              // Check if select only has exclusions (all values are false)
+              const selectValues = Object.values(args.select);
+              const hasOnlyExclusions = selectValues.every((v) => v === false);
+
+              for (const { salt, base } of saltFields) {
+                // Only add salt if base field is not explicitly excluded
+                if (args.select[salt] === undefined && args.select[base] !== false) {
+                  args.select[salt] = true;
+                  // Always add base field when adding salt field
+                  // This ensures we can properly encode the salted ID in the result
+                  if (args.select[base] === undefined) {
+                    args.select[base] = true;
+                  }
+                  console.log(`[saltids] Added ${salt} and ${base} to select`);
+                }
+              }
+            }
+
             // 场景：用户调用 findUnique，但我们注入了 salt。
             // 此时 args.where 包含 { id, salt }，这在没有联合唯一索引时会导致 Prisma 报错。
             // 解决：拦截此操作，手动清理 args.where 中的 salt，调用原 query，并在结果中验证。
-            if (operation === "findUnique" && didTransformId) {
+            if (operation === 'findUnique' && didTransformId) {
               const saltFields = registry.getSaltFields(model);
               const expectedSalts: Record<string, any> = {};
 
               // Helper: Recursively extract and remove salt fields from object
               const extractAndRemoveSalts = (obj: any) => {
-                if (!obj || typeof obj !== "object") return;
+                if (!obj || typeof obj !== 'object') return;
                 for (const key of Object.keys(obj)) {
                   const saltDef = saltFields.find((f) => f.salt === key);
                   if (saltDef) {
                     expectedSalts[key] = obj[key];
                     delete obj[key];
-                  } else if (typeof obj[key] === "object") {
+                  } else if (typeof obj[key] === 'object') {
                     extractAndRemoveSalts(obj[key]);
                   }
                 }

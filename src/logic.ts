@@ -1,8 +1,8 @@
-import { ModelRegistry, SaltIdsHelper } from "./utils";
-import { SaltIdsOptions } from "./types";
+import { SaltIdsOptions } from './types';
+import { ModelRegistry, SaltIdsHelper } from './utils';
 
 function isPlainObject(val: unknown): val is Record<string, any> {
-  return typeof val === "object" && val !== null && !Array.isArray(val) && !(val instanceof Date);
+  return typeof val === 'object' && val !== null && !Array.isArray(val) && !(val instanceof Date);
 }
 
 function pushAnd(where: Record<string, any>, clause: Record<string, any>) {
@@ -22,7 +22,7 @@ function decodeSaltIdIfNeeded(
   val: unknown,
   options: Required<SaltIdsOptions>
 ): { isSaltId: boolean; id?: number; salt?: number } {
-  if (typeof val !== "number") return { isSaltId: false };
+  if (typeof val !== 'number') return { isSaltId: false };
   if (!SaltIdsHelper.isPotentialSaltId(val, options.saltLength)) return { isSaltId: false };
   const { id, salt } = SaltIdsHelper.decode(val, options.saltLength);
   return { isSaltId: true, id, salt };
@@ -39,7 +39,7 @@ function buildOrClausesForIn(
   const pairs: Array<{ id: number; salt: number }> = [];
 
   for (const v of list) {
-    if (typeof v !== "number") continue;
+    if (typeof v !== 'number') continue;
     const decoded = decodeSaltIdIfNeeded(v, options);
     if (decoded.isSaltId) {
       pairs.push({ id: decoded.id!, salt: decoded.salt! });
@@ -75,17 +75,17 @@ function transformSaltedFieldFilterObject(
     return decoded.id;
   };
 
-  if ("equals" in filter) {
+  if ('equals' in filter) {
     const id = decodeToAndSaltEq(filter.equals);
     if (id !== undefined) filter.equals = id;
   }
 
-  if ("set" in filter) {
+  if ('set' in filter) {
     const id = decodeToAndSaltEq(filter.set);
     if (id !== undefined) filter.set = id;
   }
 
-  for (const op of ["gt", "gte", "lt", "lte"] as const) {
+  for (const op of ['gt', 'gte', 'lt', 'lte'] as const) {
     if (!(op in filter)) continue;
     const decoded = decodeSaltIdIfNeeded(filter[op], options);
     if (decoded.isSaltId) {
@@ -94,7 +94,7 @@ function transformSaltedFieldFilterObject(
     }
   }
 
-  if ("in" in filter) {
+  if ('in' in filter) {
     if (Array.isArray(filter.in) && filter.in.length > 0) {
       const orClauses = buildOrClausesForIn(baseKey, saltKey, filter.in, options);
       delete filter.in;
@@ -105,13 +105,13 @@ function transformSaltedFieldFilterObject(
     }
   }
 
-  if ("notIn" in filter) {
+  if ('notIn' in filter) {
     const list = Array.isArray(filter.notIn) ? filter.notIn : [];
     const rawIds: number[] = [];
     const saltIds: number[] = [];
 
     for (const v of list) {
-      if (typeof v !== "number") continue;
+      if (typeof v !== 'number') continue;
       const decoded = decodeSaltIdIfNeeded(v, options);
       if (decoded.isSaltId) saltIds.push(v);
       else rawIds.push(v);
@@ -127,7 +127,7 @@ function transformSaltedFieldFilterObject(
     else delete filter.notIn;
   }
 
-  if ("not" in filter) {
+  if ('not' in filter) {
     const notVal = filter.not;
     const decoded = decodeSaltIdIfNeeded(notVal, options);
     if (decoded.isSaltId) {
@@ -136,14 +136,14 @@ function transformSaltedFieldFilterObject(
       did = true;
     } else if (isPlainObject(notVal)) {
       const inner = notVal as Record<string, any>;
-      if ("equals" in inner) {
+      if ('equals' in inner) {
         const decodedInner = decodeSaltIdIfNeeded(inner.equals, options);
         if (decodedInner.isSaltId) {
           pushAnd(where, { NOT: { [baseKey]: decodedInner.id, [saltKey]: decodedInner.salt } });
           delete filter.not;
           did = true;
         }
-      } else if ("in" in inner) {
+      } else if ('in' in inner) {
         if (Array.isArray(inner.in) && inner.in.length > 0) {
           const orClauses = buildOrClausesForIn(baseKey, saltKey, inner.in, options);
           if (orClauses.length > 0) {
@@ -172,68 +172,95 @@ export function deepTransformInput(
   obj: any,
   modelName: string,
   registry: ModelRegistry,
-  options: Required<SaltIdsOptions>
+  options: Required<SaltIdsOptions>,
+  parentKey?: string
 ): { didTransformId: boolean } {
   let didTransformId = false;
 
-  if (!obj || typeof obj !== "object") return { didTransformId };
-  if (!modelName) return { didTransformId }; // Safety check
+  if (!obj || typeof obj !== 'object') return { didTransformId };
+  if (!modelName) return { didTransformId };
 
   if (Array.isArray(obj)) {
     for (const item of obj) {
-      const res = deepTransformInput(item, modelName, registry, options);
+      const res = deepTransformInput(item, modelName, registry, options, parentKey);
       if (res.didTransformId) didTransformId = true;
     }
     return { didTransformId };
   }
 
-  // 获取当前模型的 Salt 字段定义
   const saltFields = registry.getSaltFields(modelName);
+  const uniqueIndexes = registry.getUniqueIndexes(modelName);
+
+  const isUniqueIndexKey = (key: string): boolean => {
+    for (const idx of uniqueIndexes) {
+      const compositeKey = idx.fields.join('_');
+      if (key === compositeKey) return true;
+      if (idx.name && key === idx.name) return true;
+    }
+    return false;
+  };
+
+  const getUniqueIndexFields = (key: string): string[] | null => {
+    for (const idx of uniqueIndexes) {
+      const compositeKey = idx.fields.join('_');
+      if (key === compositeKey || key === idx.name) {
+        return idx.fields;
+      }
+    }
+    return null;
+  };
 
   for (const key of Object.keys(obj)) {
     const val = obj[key];
 
-    // Case A: 假如 key 是某个需要混淆的字段 (base field)
+    if (isUniqueIndexKey(key) && isPlainObject(val)) {
+      const indexFields = getUniqueIndexFields(key);
+      if (indexFields) {
+        for (const field of indexFields) {
+          const fieldSaltDef = saltFields.find((f) => f.base === field);
+          if (fieldSaltDef && val[field] !== undefined && typeof val[field] === 'number') {
+            const fieldVal = val[field];
+            if (SaltIdsHelper.isPotentialSaltId(fieldVal, options.saltLength)) {
+              const { id } = SaltIdsHelper.decode(fieldVal, options.saltLength);
+              val[field] = id;
+              didTransformId = true;
+            }
+          }
+        }
+      }
+      continue;
+    }
+
     const saltFieldDef = saltFields.find((f) => f.base === key);
 
-    if (saltFieldDef && typeof val === "number") {
+    if (saltFieldDef && typeof val === 'number') {
       if (obj[saltFieldDef.salt] === undefined && SaltIdsHelper.isPotentialSaltId(val, options.saltLength)) {
         const { id, salt } = SaltIdsHelper.decode(val, options.saltLength);
-
-        obj[key] = id; // 替换为真实 ID
-
-        // 自动注入 Salt (如果缺失)
+        obj[key] = id;
         obj[saltFieldDef.salt] = salt;
-
-        // 标记：如果转换了字段，可能影响 findUnique
-        // 简单启发式：只要转换了任何字段，都标记一下
         didTransformId = true;
       }
     } else if (saltFieldDef && val === true) {
-      // Case: select (val === true) 或 include (val === true)
-      // 自动注入 salt 字段，确保结果劫持时有 salt 值可用
-      // Note: orderBy 不需要 salt 参与，只是对 ID 排序
       if (obj[saltFieldDef.salt] === undefined) {
         obj[saltFieldDef.salt] = true;
       }
-    }
-    // Case: where / data filter object for salted fields (e.g. in/not/gt/lt/set/equals)
-    else if (saltFieldDef && isPlainObject(val)) {
+    } else if (saltFieldDef && isPlainObject(val)) {
+      // console.log(
+      //   `[saltids] deepTransformInput: Found salt field ${key} with object value, calling transformSaltedFieldFilterObject`
+      // );
       const transformed = transformSaltedFieldFilterObject(obj, saltFieldDef.base, saltFieldDef.salt, val, options);
       if (transformed) didTransformId = true;
-    }
-    // Case B: 递归处理对象 (可能是关系嵌套，也可能是操作符)
-    else if (typeof val === "object" && val !== null) {
-      // Check if `key` is a known relation
+    } else if (typeof val === 'object' && val !== null) {
+      // console.log(
+      //   `[saltids] deepTransformInput: Found object key=${key}, val type=${typeof val}, isPlainObject=${isPlainObject(val)}, relation=${!!registry.getRelation(modelName, key)}`
+      // );
       const relation = registry.getRelation(modelName, key);
 
       if (relation) {
-        // 如果是关系字段，切换上下文到目标模型
-        const res = deepTransformInput(val, relation.type, registry, options);
+        const res = deepTransformInput(val, relation.type, registry, options, key);
         if (res.didTransformId) didTransformId = true;
       } else {
-        // 如果不是关系字段 (如 AND, OR, create, where 等操作符)，保持当前模型上下文
-        const res = deepTransformInput(val, modelName, registry, options);
+        const res = deepTransformInput(val, modelName, registry, options, key);
         if (res.didTransformId) didTransformId = true;
       }
     }
@@ -253,7 +280,7 @@ export function deepInjectSalt(
   options: Required<SaltIdsOptions>,
   skipRootInjection = false
 ) {
-  if (!data || typeof data !== "object") return;
+  if (!data || typeof data !== 'object') return;
   if (!modelName) return;
 
   if (Array.isArray(data)) {
@@ -283,14 +310,14 @@ export function deepInjectSalt(
   // 2. 递归查找嵌套写入
   for (const key of Object.keys(data)) {
     const val = data[key];
-    if (typeof val === "object" && val !== null) {
+    if (typeof val === 'object' && val !== null) {
       // Check for relation
       const relation = registry.getRelation(modelName, key);
       const targetModel = relation ? relation.type : undefined;
 
       if (targetModel) {
         // Prisma Nested Writes Keywords
-        const nestedOps = ["create", "update", "upsert", "connectOrCreate"];
+        const nestedOps = ['create', 'update', 'upsert', 'connectOrCreate'];
 
         // Handle simple nested create (e.g. { posts: { create: ... } })
         if (val.create) {
@@ -322,7 +349,7 @@ export function deepHijackResult(
   modelName?: string,
   registry?: ModelRegistry
 ) {
-  if (!data || typeof data !== "object") return;
+  if (!data || typeof data !== 'object') return;
 
   if (Array.isArray(data)) {
     data.forEach((item) => deepHijackResult(item, options, modelName, registry));
@@ -330,11 +357,14 @@ export function deepHijackResult(
   }
 
   const keys = Object.keys(data);
+  // console.log(`[saltids] deepHijackResult for ${modelName}: keys=${keys.join(',')}`);
   for (const key of keys) {
     if (key.endsWith(options.saltSuffix)) {
       const saltVal = data[key];
       const baseKey = key.slice(0, -options.saltSuffix.length);
       const baseVal = data[baseKey];
+
+      // console.log(`[saltids] Found salt field ${key}: saltVal=${saltVal}, baseKey=${baseKey}, baseVal=${baseVal}`);
 
       // 0. Safety Check: Verify against registry to avoid false positives (e.g. inside JSON)
       let shouldHijack = true;
@@ -349,7 +379,7 @@ export function deepHijackResult(
         }
       }
 
-      if (shouldHijack && typeof saltVal === "number" && typeof baseVal === "number") {
+      if (shouldHijack && typeof saltVal === 'number' && typeof baseVal === 'number') {
         // 1. Hide Salt
         Object.defineProperty(data, key, {
           enumerable: false,
@@ -359,6 +389,8 @@ export function deepHijackResult(
         });
 
         // 2. Hijack Base ID
+        const encodedId = SaltIdsHelper.encode(baseVal, saltVal, options.saltLength);
+        // console.log(`[saltids] Hijacking ${modelName}.${baseKey}: ${baseVal} + ${saltVal} = ${encodedId}`);
         Object.defineProperty(data, baseKey, {
           enumerable: true,
           configurable: true,
@@ -380,7 +412,7 @@ export function deepHijackResult(
     }
 
     const val = data[key];
-    if (typeof val === "object" && val !== null && !(val instanceof Date)) {
+    if (typeof val === 'object' && val !== null && !(val instanceof Date)) {
       let nextModel: string | undefined;
       if (registry && modelName) {
         const relation = registry.getRelation(modelName, key);

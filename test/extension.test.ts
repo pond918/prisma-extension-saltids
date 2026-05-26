@@ -418,4 +418,137 @@ describe("Prisma Extension SaltIDs", () => {
     expect(rows[0].id).toBe(saltId);
     expect(Object.keys(rows[0])).not.toContain("idSalt");
   });
+
+  describe("Unique Index without Salt field", () => {
+    it("19. Should decode salted ID in unique index query without including salt field", async () => {
+      const tenant = await prisma.user.create({ data: { name: "Tenant1" } });
+      const tenantSaltId = tenant.id;
+
+      const service = await prisma.service.create({
+        data: {
+          name: "TestService",
+          slug: "test-service",
+          version: "1.0.0",
+          tenantId_: tenantSaltId,
+        },
+      });
+
+      expect(service).toBeDefined();
+      expect(service.tenantId_).toBe(tenantSaltId);
+
+      const found = await prisma.service.findUnique({
+        where: {
+          tenantId__slug_version_deletedAt: {
+            tenantId_: tenantSaltId,
+            slug: "test-service",
+            version: "1.0.0",
+            deletedAt: 0,
+          },
+        },
+      });
+
+      expect(found).not.toBeNull();
+      expect(found?.slug).toBe("test-service");
+      expect(found?.tenantId_).toBe(tenantSaltId);
+    });
+
+    it("20. Should handle upsert with unique index without salt field", async () => {
+      const tenant = await prisma.user.create({ data: { name: "Tenant2" } });
+      const tenantSaltId = tenant.id;
+
+      const created = await prisma.service.upsert({
+        where: {
+          tenantId__slug_version_deletedAt: {
+            tenantId_: tenantSaltId,
+            slug: "upsert-service",
+            version: "1.0.0",
+            deletedAt: 0,
+          },
+        },
+        update: {
+          name: "UpdatedService",
+        },
+        create: {
+          name: "CreatedService",
+          slug: "upsert-service",
+          version: "1.0.0",
+          tenantId_: tenantSaltId,
+        },
+      });
+
+      expect(created).toBeDefined();
+      expect(created.name).toBe("CreatedService");
+
+      const updated = await prisma.service.upsert({
+        where: {
+          tenantId__slug_version_deletedAt: {
+            tenantId_: tenantSaltId,
+            slug: "upsert-service",
+            version: "1.0.0",
+            deletedAt: 0,
+          },
+        },
+        update: {
+          name: "UpdatedService",
+        },
+        create: {
+          name: "CreatedService",
+          slug: "upsert-service",
+          version: "1.0.0",
+          tenantId_: tenantSaltId,
+        },
+      });
+
+      expect(updated.name).toBe("UpdatedService");
+      expect(updated.id).toBe(created.id);
+    });
+
+    it("21. Should work with multiple unique index queries", async () => {
+      const tenant1 = await prisma.user.create({ data: { name: "Tenant3" } });
+      const tenant2 = await prisma.user.create({ data: { name: "Tenant4" } });
+
+      await prisma.service.create({
+        data: {
+          name: "Service1",
+          slug: "multi-service",
+          version: "1.0.0",
+          tenantId_: tenant1.id,
+        },
+      });
+
+      await prisma.service.create({
+        data: {
+          name: "Service2",
+          slug: "multi-service",
+          version: "1.0.0",
+          tenantId_: tenant2.id,
+        },
+      });
+
+      const found1 = await prisma.service.findUnique({
+        where: {
+          tenantId__slug_version_deletedAt: {
+            tenantId_: tenant1.id,
+            slug: "multi-service",
+            version: "1.0.0",
+            deletedAt: 0,
+          },
+        },
+      });
+
+      const found2 = await prisma.service.findUnique({
+        where: {
+          tenantId__slug_version_deletedAt: {
+            tenantId_: tenant2.id,
+            slug: "multi-service",
+            version: "1.0.0",
+            deletedAt: 0,
+          },
+        },
+      });
+
+      expect(found1?.name).toBe("Service1");
+      expect(found2?.name).toBe("Service2");
+    });
+  });
 });
