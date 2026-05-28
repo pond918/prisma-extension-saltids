@@ -78,29 +78,26 @@ export const saltIdsExtension = (options?: SaltIdsOptions, dmmf?: BaseDMMF) => {
             let result: any;
 
             // Auto-ensure salt fields are selected for read operations
+            // Salt fields MUST be selected from DB for encoding (deepHijackResult encodes rawId+salt into saltedId).
+            // Hiding salt from API response is deepHijackResult's job (sets enumerable: false), NOT SQL select's job.
+            // So even if business code sets {xxxSalt: false} in select (e.g. via defSelect), we override to true.
             const readOperations = ['findUnique', 'findFirst', 'findMany', 'update', 'upsert'];
             if (readOperations.includes(operation) && args.select) {
               const saltFields = registry.getSaltFields(model);
-              console.log(
-                `[saltids] Auto-adding salt fields for ${model}.${operation}:`,
-                saltFields.map((f) => f.salt)
-              );
-              console.log(`[saltids] args.select keys:`, Object.keys(args.select));
-
-              // Check if select only has exclusions (all values are false)
-              const selectValues = Object.values(args.select);
-              const hasOnlyExclusions = selectValues.every((v) => v === false);
 
               for (const { salt, base } of saltFields) {
-                // Only add salt if base field is not explicitly excluded
-                if (args.select[salt] === undefined && args.select[base] !== false) {
+                // Skip only when base field is explicitly excluded — no base means nothing to encode
+                if (args.select[base] === false) continue;
+
+                // Force salt field to be selected (override false → true)
+                // Business code may set xxxSalt: false to exclude from API response,
+                // but SQL must still select it for deepHijackResult to encode.
+                if (args.select[salt] !== true) {
                   args.select[salt] = true;
-                  // Always add base field when adding salt field
-                  // This ensures we can properly encode the salted ID in the result
-                  if (args.select[base] === undefined) {
-                    args.select[base] = true;
-                  }
-                  console.log(`[saltids] Added ${salt} and ${base} to select`);
+                }
+                // Ensure base field is also selected when not explicitly included
+                if (args.select[base] === undefined) {
+                  args.select[base] = true;
                 }
               }
             }

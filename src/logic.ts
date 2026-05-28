@@ -408,6 +408,13 @@ export function deepHijackResult(
           writable: true,
           configurable: true,
         });
+      } else if (shouldHijack && baseVal === undefined && typeof saltVal === 'number') {
+        Object.defineProperty(data, key, {
+          enumerable: false,
+          value: saltVal,
+          writable: true,
+          configurable: true,
+        });
       }
     }
 
