@@ -33,7 +33,11 @@ function ensureNumber(x: unknown): number {
 
 function decodeSaltId(publicId: unknown, saltLength: number): { id: number; salt: number } {
   const n = ensureNumber(publicId);
-  return SaltIdsHelper.decode(n, saltLength);
+  const result = SaltIdsHelper.decode(n, saltLength);
+  if (result.id === undefined || result.salt === undefined) {
+    throw new Error("prisma-extension-saltids: invalid saltId");
+  }
+  return result as { id: number; salt: number };
 }
 
 function combineOr(parts: Sql[]): Sql {

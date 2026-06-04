@@ -719,4 +719,258 @@ describe('Prisma Extension SaltIDs', () => {
       expect(product.ownerId).toBeNull();
     });
   });
+
+  describe('Reference field salt mismatch (strict rawId+salt matching)', () => {
+    // { in: [...] } queries must strictly match both rawId AND salt.
+    // If a reference field's salt column differs from the input saltId's salt,
+    // the record should NOT be matched. This is the correct business semantics:
+    // a saltId encodes a specific rawId+salt pair, and { in: [...] } must
+    // match that exact pair, not just the rawId.
+
+    it('33. findMany with FK { in: [...] } should NOT match when FK salt differs from input saltId', async () => {
+      // 1. Create a User (target record)
+      const user = await prisma.user.create({ data: { name: 'RefTargetUser' } });
+
+      // 2. Create a Post with authorId = user.id
+      //    saltids extension will set authorIdSalt = user.idSalt
+      const post = await prisma.post.create({
+        data: { title: 'RefTestPost', authorId: user.id },
+      });
+
+      // Verify initial state: authorIdSalt matches user.idSalt
+      expect(post.authorId).toBe(user.id);
+
+      // 3. Tamper with Post.authorIdSalt to simulate salt mismatch
+      //    (e.g., Favorite.targetIdSalt != ConnectorMeta.idSalt)
+      const rawPostPk = SaltIdsHelper.decode(post.postPk, 3).id;
+      const rawPost = await prisma.$queryRawUnsafe(
+        `SELECT postPk, authorId, authorIdSalt FROM Post WHERE postPk = ${rawPostPk}`
+      ) as any[];
+      const originalSalt = rawPost[0].authorIdSalt;
+      const mismatchedSalt = originalSalt + 1;
+
+      await prisma.$executeRawUnsafe(
+        `UPDATE Post SET authorIdSalt = ${mismatchedSalt} WHERE postPk = ${rawPostPk}`
+      );
+
+      // 4. Re-fetch the post: authorId is now a different saltId (rawId + mismatchedSalt)
+      const refetched = await prisma.post.findUnique({
+        where: { postPk: post.postPk },
+      });
+      expect(refetched?.authorId).not.toBe(user.id);
+
+      // 5. THE KEY TEST: { in: [user.id] } should NOT match the Post
+      //    because user.id decodes to (rawId, originalSalt) but Post now has mismatchedSalt
+      const found = await prisma.post.findMany({
+        where: { authorId: { in: [user.id] } },
+      });
+
+      const foundPks = found.map((p: any) => p.postPk);
+      expect(foundPks).not.toContain(post.postPk);
+    });
+
+    it('34. findMany with FK { in: [...] } should match when salt matches correctly', async () => {
+      // When salt DOES match, { in: [...] } should find the record
+      const user1 = await prisma.user.create({ data: { name: 'RefMatchUser1' } });
+      const user2 = await prisma.user.create({ data: { name: 'RefMatchUser2' } });
+
+      const post1 = await prisma.post.create({
+        data: { title: 'RefMatchPost1', authorId: user1.id },
+      });
+      const post2 = await prisma.post.create({
+        data: { title: 'RefMatchPost2', authorId: user2.id },
+      });
+
+      // Query with user1.id should find post1 but NOT post2
+      const found = await prisma.post.findMany({
+        where: { authorId: { in: [user1.id] } },
+      });
+
+      const foundPks = found.map((p: any) => p.postPk);
+      expect(foundPks).toContain(post1.postPk);
+      expect(foundPks).not.toContain(post2.postPk);
+    });
+
+    it('35. findMany with FK equals should match when salt matches (baseline)', async () => {
+      // Baseline: when salt matches, equals query should work
+      const user = await prisma.user.create({ data: { name: 'RefBaselineUser' } });
+      const post = await prisma.post.create({
+        data: { title: 'RefBaselinePost', authorId: user.id },
+      });
+
+      const found = await prisma.post.findMany({
+        where: { authorId: user.id },
+      });
+
+      expect(found.length).toBeGreaterThanOrEqual(1);
+      const foundPks = found.map((p: any) => p.postPk);
+      expect(foundPks).toContain(post.postPk);
+    });
+
+    it('36. findMany with FK { in: [...] } mixing matched and mismatched salts', async () => {
+      const user1 = await prisma.user.create({ data: { name: 'RefMixUser1' } });
+      const user2 = await prisma.user.create({ data: { name: 'RefMixUser2' } });
+      const post1 = await prisma.post.create({
+        data: { title: 'RefMixPost1', authorId: user1.id },
+      });
+      const post2 = await prisma.post.create({
+        data: { title: 'RefMixPost2', authorId: user2.id },
+      });
+
+      const rawPostPk1 = SaltIdsHelper.decode(post1.postPk, 3).id;
+      const rawPost = await prisma.$queryRawUnsafe(
+        `SELECT authorIdSalt FROM Post WHERE postPk = ${rawPostPk1}`
+      ) as any[];
+      const mismatchedSalt = rawPost[0].authorIdSalt + 42;
+      await prisma.$executeRawUnsafe(
+        `UPDATE Post SET authorIdSalt = ${mismatchedSalt} WHERE postPk = ${rawPostPk1}`
+      );
+
+      const found = await prisma.post.findMany({
+        where: { authorId: { in: [user1.id, user2.id] } },
+      });
+      const foundPks = found.map((p: any) => p.postPk);
+      expect(foundPks).not.toContain(post1.postPk);
+      expect(foundPks).toContain(post2.postPk);
+    });
+  });
+
+  describe('Favorite-like upsert: FK salt correctness diagnosis', () => {
+    // Diagnose: when creating a record via upsert with a composite unique index
+    // that includes a FK field (like Favorite.targetId), does the saltids extension
+    // correctly store the target's salt in the FK's salt column?
+
+    it('37. upsert create: FK salt should match target record salt (direct DB verification)', async () => {
+      const user = await prisma.user.create({ data: { name: 'FavTargetUser' } });
+
+      // Get User's raw id and idSalt directly from DB
+      const rawUser = await prisma.$queryRawUnsafe(
+        `SELECT id, idSalt FROM User WHERE name = 'FavTargetUser'`
+      ) as any[];
+      const dbUserId = rawUser[0].id;
+      const dbUserIdSalt = rawUser[0].idSalt;
+      console.log(`[DIAG] User raw: id=${dbUserId}, idSalt=${dbUserIdSalt}, saltId=${user.id}`);
+
+      // Create Service via upsert (simulates Favorite creation with composite unique index)
+      const service = await prisma.service.upsert({
+        where: {
+          tenantId__slug_version_deletedAt: {
+            tenantId_: user.id,
+            slug: 'fav-diag-test',
+            version: '1.0.0',
+            deletedAt: 0,
+          },
+        },
+        update: {},
+        create: {
+          name: 'FavDiagService',
+          slug: 'fav-diag-test',
+          version: '1.0.0',
+          tenantId_: user.id,
+        },
+      });
+
+      // Get Service's raw tenantId_ and tenantId_Salt directly from DB
+      const rawService = await prisma.$queryRawUnsafe(
+        `SELECT id, idSalt, tenantId_, tenantId_Salt FROM Service WHERE slug = 'fav-diag-test'`
+      ) as any[];
+      const dbTenantId = rawService[0].tenantId_;
+      const dbTenantIdSalt = rawService[0].tenantId_Salt;
+      console.log(`[DIAG] Service raw: tenantId_=${dbTenantId}, tenantId_Salt=${dbTenantIdSalt}`);
+      console.log(`[DIAG] User raw: id=${dbUserId}, idSalt=${dbUserIdSalt}`);
+
+      // KEY ASSERTION: tenantId_Salt MUST equal User.idSalt
+      expect(dbTenantIdSalt).toBe(dbUserIdSalt);
+      expect(dbTenantId).toBe(dbUserId);
+
+      // Verify findMany with { in: [...] } works
+      const found = await prisma.service.findMany({
+        where: { tenantId_: { in: [user.id] } },
+      });
+      expect(found.length).toBeGreaterThanOrEqual(1);
+      expect(found.some((s: any) => s.slug === 'fav-diag-test')).toBe(true);
+    });
+
+    it('38. upsert update (idempotent re-create): FK salt should remain correct', async () => {
+      const user = await prisma.user.create({ data: { name: 'FavIdempotentUser' } });
+
+      // First upsert: creates
+      await prisma.service.upsert({
+        where: {
+          tenantId__slug_version_deletedAt: {
+            tenantId_: user.id,
+            slug: 'fav-idempotent-test',
+            version: '1.0.0',
+            deletedAt: 0,
+          },
+        },
+        update: {},
+        create: {
+          name: 'FavIdempotentService',
+          slug: 'fav-idempotent-test',
+          version: '1.0.0',
+          tenantId_: user.id,
+        },
+      });
+
+      // Second upsert: finds existing, update is empty
+      await prisma.service.upsert({
+        where: {
+          tenantId__slug_version_deletedAt: {
+            tenantId_: user.id,
+            slug: 'fav-idempotent-test',
+            version: '1.0.0',
+            deletedAt: 0,
+          },
+        },
+        update: {},
+        create: {
+          name: 'FavIdempotentService',
+          slug: 'fav-idempotent-test',
+          version: '1.0.0',
+          tenantId_: user.id,
+        },
+      });
+
+      // Direct DB check
+      const rawUser = await prisma.$queryRawUnsafe(
+        `SELECT id, idSalt FROM User WHERE name = 'FavIdempotentUser'`
+      ) as any[];
+      const rawService = await prisma.$queryRawUnsafe(
+        `SELECT tenantId_, tenantId_Salt FROM Service WHERE slug = 'fav-idempotent-test'`
+      ) as any[];
+
+      console.log(`[DIAG] User: id=${rawUser[0].id}, idSalt=${rawUser[0].idSalt}`);
+      console.log(`[DIAG] Service: tenantId_=${rawService[0].tenantId_}, tenantId_Salt=${rawService[0].tenantId_Salt}`);
+
+      expect(rawService[0].tenantId_Salt).toBe(rawUser[0].idSalt);
+      expect(rawService[0].tenantId_).toBe(rawUser[0].id);
+
+      const found = await prisma.service.findMany({
+        where: { tenantId_: { in: [user.id] } },
+      });
+      expect(found.length).toBeGreaterThanOrEqual(1);
+      expect(found.some((s: any) => s.slug === 'fav-idempotent-test')).toBe(true);
+    });
+
+    it('39. direct create (no upsert): FK salt should match target salt', async () => {
+      const user = await prisma.user.create({ data: { name: 'FavDirectCreateUser' } });
+      const post = await prisma.post.create({
+        data: { title: 'FavDirectCreatePost', authorId: user.id },
+      });
+
+      const rawUser = await prisma.$queryRawUnsafe(
+        `SELECT id, idSalt FROM User WHERE name = 'FavDirectCreateUser'`
+      ) as any[];
+      const rawPost = await prisma.$queryRawUnsafe(
+        `SELECT authorId, authorIdSalt FROM Post WHERE title = 'FavDirectCreatePost'`
+      ) as any[];
+
+      console.log(`[DIAG] User: id=${rawUser[0].id}, idSalt=${rawUser[0].idSalt}`);
+      console.log(`[DIAG] Post: authorId=${rawPost[0].authorId}, authorIdSalt=${rawPost[0].authorIdSalt}`);
+
+      expect(rawPost[0].authorIdSalt).toBe(rawUser[0].idSalt);
+      expect(rawPost[0].authorId).toBe(rawUser[0].id);
+    });
+  });
 });

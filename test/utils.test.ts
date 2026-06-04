@@ -43,6 +43,17 @@ describe('SaltIdsHelper', () => {
       expect(() => SaltIdsHelper.encode(5, 10000, SALT_LEN)).toThrow();
       expect(() => SaltIdsHelper.encode(5, 1000, SALT_LEN_3)).toThrow();
     });
+
+    it('should return NaN for non-integer realId', () => {
+      expect(SaltIdsHelper.encode(1.5, 1234, SALT_LEN)).toBeNaN();
+      expect(SaltIdsHelper.encode(NaN, 1234, SALT_LEN)).toBeNaN();
+      expect(SaltIdsHelper.encode(Infinity, 1234, SALT_LEN)).toBeNaN();
+    });
+
+    it('should return NaN for non-integer salt', () => {
+      expect(SaltIdsHelper.encode(5, 1.5, SALT_LEN)).toBeNaN();
+      expect(SaltIdsHelper.encode(5, NaN, SALT_LEN)).toBeNaN();
+    });
   });
 
   describe('decode', () => {
@@ -74,6 +85,21 @@ describe('SaltIdsHelper', () => {
     it('should decode 0 as {id:0, salt:0}', () => {
       expect(SaltIdsHelper.decode(0, SALT_LEN)).toEqual({ id: 0, salt: 0 });
     });
+
+    it('should return {} for invalid negative saltIds (abs < 10^saltLen)', () => {
+      // [-9999, -1] with saltLen=4 are invalid: encode(0, salt, 4) is always >= 0
+      expect(SaltIdsHelper.decode(-1, SALT_LEN)).toEqual({});
+      expect(SaltIdsHelper.decode(-9999, SALT_LEN)).toEqual({});
+      expect(SaltIdsHelper.decode(-5000, SALT_LEN)).toEqual({});
+      expect(SaltIdsHelper.decode(-1, SALT_LEN_3)).toEqual({});
+      expect(SaltIdsHelper.decode(-999, SALT_LEN_3)).toEqual({});
+    });
+
+    it('should return {} for non-integer pid', () => {
+      expect(SaltIdsHelper.decode(1.5, SALT_LEN)).toEqual({});
+      expect(SaltIdsHelper.decode(NaN, SALT_LEN)).toEqual({});
+      expect(SaltIdsHelper.decode(Infinity, SALT_LEN)).toEqual({});
+    });
   });
 
   describe('round-trip: encode → decode', () => {
@@ -100,7 +126,7 @@ describe('SaltIdsHelper', () => {
   });
 
   describe('isPotentialSaltId', () => {
-    it('should always return true (all numbers are valid saltids in arithmetic encoding)', () => {
+    it('should return true for valid saltIds', () => {
       expect(SaltIdsHelper.isPotentialSaltId(0, SALT_LEN)).toBe(true);
       expect(SaltIdsHelper.isPotentialSaltId(1, SALT_LEN)).toBe(true);
       expect(SaltIdsHelper.isPotentialSaltId(9999, SALT_LEN)).toBe(true);
@@ -109,6 +135,33 @@ describe('SaltIdsHelper', () => {
       expect(SaltIdsHelper.isPotentialSaltId(-51234, SALT_LEN)).toBe(true);
       expect(SaltIdsHelper.isPotentialSaltId(0, SALT_LEN_3)).toBe(true);
       expect(SaltIdsHelper.isPotentialSaltId(999, SALT_LEN_3)).toBe(true);
+    });
+
+    it('should return false for invalid negative range [-9999, -1] when saltLen=4', () => {
+      // These values cannot be produced by encode: encode(0, salt, 4) is always >= 0
+      // decode(-1, 4) would give {id:0, salt:1} colliding with decode(1, 4)
+      expect(SaltIdsHelper.isPotentialSaltId(-1, SALT_LEN)).toBe(false);
+      expect(SaltIdsHelper.isPotentialSaltId(-9999, SALT_LEN)).toBe(false);
+      expect(SaltIdsHelper.isPotentialSaltId(-5000, SALT_LEN)).toBe(false);
+    });
+
+    it('should return false for invalid negative range [-999, -1] when saltLen=3', () => {
+      expect(SaltIdsHelper.isPotentialSaltId(-1, SALT_LEN_3)).toBe(false);
+      expect(SaltIdsHelper.isPotentialSaltId(-999, SALT_LEN_3)).toBe(false);
+      expect(SaltIdsHelper.isPotentialSaltId(-500, SALT_LEN_3)).toBe(false);
+    });
+
+    it('should return true for valid negative saltIds (abs >= 10^saltLen)', () => {
+      expect(SaltIdsHelper.isPotentialSaltId(-10000, SALT_LEN)).toBe(true);
+      expect(SaltIdsHelper.isPotentialSaltId(-51234, SALT_LEN)).toBe(true);
+      expect(SaltIdsHelper.isPotentialSaltId(-1000, SALT_LEN_3)).toBe(true);
+    });
+
+    it('should return false for non-integer inputs', () => {
+      expect(SaltIdsHelper.isPotentialSaltId(1.5, SALT_LEN)).toBe(false);
+      expect(SaltIdsHelper.isPotentialSaltId(NaN, SALT_LEN)).toBe(false);
+      expect(SaltIdsHelper.isPotentialSaltId(Infinity, SALT_LEN)).toBe(false);
+      expect(SaltIdsHelper.isPotentialSaltId(-Infinity, SALT_LEN)).toBe(false);
     });
   });
 

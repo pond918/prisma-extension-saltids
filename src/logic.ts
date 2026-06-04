@@ -52,6 +52,8 @@ function buildOrClausesForIn(
   if (rawIds.length > 0) {
     orClauses.push({ [baseKey]: { in: rawIds } });
   }
+
+  // Strict matching: decoded saltIds must match both rawId AND salt.
   for (const p of pairs) {
     orClauses.push({ [baseKey]: p.id, [saltKey]: p.salt });
   }

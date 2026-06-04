@@ -15,6 +15,9 @@ const DEFAULT_SALT_LEN = 4;
 
 export class SaltIdsHelper {
   static encode(realId: number, salt: number, saltLen: number = DEFAULT_SALT_LEN): number {
+    if (!Number.isInteger(realId) || !Number.isInteger(salt)) {
+      return NaN;
+    }
     const maxSalt = 10 ** saltLen;
     if (salt < 0 || salt >= maxSalt) {
       throw new Error(`Salt must be in range [0, ${maxSalt - 1}]`);
@@ -23,8 +26,16 @@ export class SaltIdsHelper {
     return realId < 0 ? -result : result;
   }
 
-  static decode(pid: number, saltLen: number = DEFAULT_SALT_LEN): { id: number; salt: number } {
+  static decode(pid: number, saltLen: number = DEFAULT_SALT_LEN): { id?: number; salt?: number } {
+    if (!Number.isInteger(pid)) {
+      return {};
+    }
     const divisor = 10 ** saltLen;
+    // Invalid range: negative pid with abs(pid) < divisor
+    // encode(0, salt, saltLen) always produces >= 0, so [-divisor+1, -1] are invalid
+    if (pid < 0 && Math.abs(pid) < divisor) {
+      return {};
+    }
     const absPid = Math.abs(pid);
     const salt = absPid % divisor;
     const id = Math.floor(absPid / divisor);
@@ -34,7 +45,15 @@ export class SaltIdsHelper {
     };
   }
 
-  static isPotentialSaltId(_val: number, _saltLen: number = DEFAULT_SALT_LEN): boolean {
+  static isPotentialSaltId(val: number, saltLen: number = DEFAULT_SALT_LEN): boolean {
+    if (!Number.isInteger(val)) {
+      return false;
+    }
+    const divisor = 10 ** saltLen;
+    // Invalid range: negative val with abs(val) < divisor
+    if (val < 0 && Math.abs(val) < divisor) {
+      return false;
+    }
     return true;
   }
 
