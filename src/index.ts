@@ -81,7 +81,7 @@ export const saltIdsExtension = (options?: SaltIdsOptions, dmmf?: BaseDMMF) => {
             // Salt fields MUST be selected from DB for encoding (deepHijackResult encodes rawId+salt into saltedId).
             // Hiding salt from API response is deepHijackResult's job (sets enumerable: false), NOT SQL select's job.
             // So even if business code sets {xxxSalt: false} in select (e.g. via defSelect), we override to true.
-            const readOperations = ['findUnique', 'findFirst', 'findMany', 'update', 'upsert'];
+            const readOperations = ['findUnique', 'findFirst', 'findMany', 'create', 'createMany', 'update', 'upsert'];
             if (readOperations.includes(operation) && args.select) {
               const saltFields = registry.getSaltFields(model);
 
@@ -102,50 +102,14 @@ export const saltIdsExtension = (options?: SaltIdsOptions, dmmf?: BaseDMMF) => {
               }
             }
 
-            // 场景：用户调用 findUnique，但我们注入了 salt。
-            // 此时 args.where 包含 { id, salt }，这在没有联合唯一索引时会导致 Prisma 报错。
-            // 解决：拦截此操作，手动清理 args.where 中的 salt，调用原 query，并在结果中验证。
-            if (operation === 'findUnique' && didTransformId) {
-              const saltFields = registry.getSaltFields(model);
-              const expectedSalts: Record<string, any> = {};
-
-              // Helper: Recursively extract and remove salt fields from object
-              const extractAndRemoveSalts = (obj: any) => {
-                if (!obj || typeof obj !== 'object') return;
-                for (const key of Object.keys(obj)) {
-                  const saltDef = saltFields.find((f) => f.salt === key);
-                  if (saltDef) {
-                    expectedSalts[key] = obj[key];
-                    delete obj[key];
-                  } else if (typeof obj[key] === 'object') {
-                    extractAndRemoveSalts(obj[key]);
-                  }
-                }
-              };
-
-              if (args.where) extractAndRemoveSalts(args.where);
-
-              // Ensure salt fields are selected if we are using select
-              if (args.select && Object.keys(expectedSalts).length > 0) {
-                for (const key of Object.keys(expectedSalts)) {
-                  args.select[key] = true;
-                }
-              }
-
-              result = await query(args);
-
-              // Verify salt match
-              if (result) {
-                for (const [key, val] of Object.entries(expectedSalts)) {
-                  if (result[key] !== val) {
-                    result = null;
-                    break;
-                  }
-                }
-              }
-            } else {
-              result = await query(args);
-            }
+            // findUnique requires no special handling.
+            // After deepTransformInput, args.where contains { id, idSalt }. Prisma 6.x
+            // findUnique accepts multi-field where (even on non-unique-index fields)
+            // without error, and the DB enforces the salt match. Keeping idSalt in
+            // where preserves the deepTransformInput idempotency guard
+            // (obj[salt] === undefined), so a second pass through this extension
+            // (e.g. via a transaction client that inherits the extension) is a no-op.
+            result = await query(args);
 
             // ------------------------------------------------
             // 4. 结果劫持 (隐藏 Salt，暴露 SaltID)

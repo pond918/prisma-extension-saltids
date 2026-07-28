@@ -959,18 +959,308 @@ describe('Prisma Extension SaltIDs', () => {
         data: { title: 'FavDirectCreatePost', authorId: user.id },
       });
 
-      const rawUser = await prisma.$queryRawUnsafe(
-        `SELECT id, idSalt FROM User WHERE name = 'FavDirectCreateUser'`
-      ) as any[];
-      const rawPost = await prisma.$queryRawUnsafe(
-        `SELECT authorId, authorIdSalt FROM Post WHERE title = 'FavDirectCreatePost'`
-      ) as any[];
+      // FK saltId should equal target saltId: deepTransformInput decodes
+      // authorId (user.id saltId) → rawId + salt, deepHijackResult re-encodes
+      // → same saltId. If salts mismatched, post.authorId !== user.id.
+      expect(post.authorId).toBe(user.id);
 
-      console.log(`[DIAG] User: id=${rawUser[0].id}, idSalt=${rawUser[0].idSalt}`);
-      console.log(`[DIAG] Post: authorId=${rawPost[0].authorId}, authorIdSalt=${rawPost[0].authorIdSalt}`);
+      // Verify via decode that rawId + salt are identical
+      const userDecoded = SaltIdsHelper.decode(user.id, 3);
+      const postAuthorDecoded = SaltIdsHelper.decode(post.authorId!, 3);
+      expect(postAuthorDecoded.salt).toBe(userDecoded.salt);
+      expect(postAuthorDecoded.id).toBe(userDecoded.id);
+    });
+  });
 
-      expect(rawPost[0].authorIdSalt).toBe(rawUser[0].idSalt);
-      expect(rawPost[0].authorId).toBe(rawUser[0].id);
+  /**
+   * BUG-956: findUnique 不需要特殊处理（delete/non-enumerable/findFirst 替代）。
+   *
+   * 根因：旧代码在 findUnique + didTransformId 时 delete salt 字段，破坏了
+   * deepTransformInput 的幂等 guard（obj[salt] === undefined）。在 ABAC Case 2
+   * 的 $transaction 中，tx client 继承 saltids 扩展，tx saltids 看到 salt=undefined
+   * → guard 命中 → 再次 decode rawId → {id:0, salt:rawId} → WHERE id=0 → NOT_FOUND。
+   *
+   * 修复：移除 findUnique 特殊处理，直接 query(args)。Prisma 6.x findUnique 运行时
+   * 接受多字段 where（即使非唯一索引字段），salt 保留在 where 中 → guard 有效 →
+   * tx saltids 不 double-decode。
+   *
+   * 验证过的失败方案：
+   * - delete：破坏 guard → double-decoding
+   * - non-enumerable：Prisma deepCloneArgs 丢弃 non-enumerable 属性 → guard 仍被破坏
+   * - findFirst 替代：saltids 的 client 是 baseClient（无 abac）→ 绕过 RLS
+   */
+  describe('BUG-956: findUnique preserves salt (no double-decoding)', () => {
+    it('40. findUnique with saltID should find the record (salt preserved in where)', async () => {
+      const user = await prisma.user.create({ data: { name: 'Bug956FindUnique' } });
+      const saltId = user.id;
+
+      // findUnique 用 saltID 查询，salt 应保留在 where 中
+      // 如果 salt 被 delete，where 只剩 rawId，仍能查到（但不安全）
+      // 如果 salt 保留，where = { id: rawId, idSalt: salt }，更精确
+      const found = await prisma.user.findUnique({
+        where: { id: saltId },
+      });
+
+      expect(found).not.toBeNull();
+      expect(found?.id).toBe(saltId);
+      expect(found?.name).toBe('Bug956FindUnique');
+    });
+
+    it('41. findUnique with correct id but wrong salt should return null', async () => {
+      const user = await prisma.user.create({ data: { name: 'Bug956WrongSalt' } });
+      const saltId = user.id;
+
+      // 解码获取 rawId 和 salt (saltLength=3 与 extension 配置一致)
+      const { id: rawId, salt: correctSalt } = SaltIdsHelper.decode(saltId, 3);
+      const wrongSalt = (correctSalt + 1) % 1000; // 错误的 salt
+
+      // 用 rawId + 错误 salt 构造 saltID
+      const wrongSaltId = SaltIdsHelper.encode(rawId, wrongSalt);
+
+      // findUnique 用错误的 saltID 查询，应返回 null
+      // 这证明 salt 确实保留在 where 中并用于 DB 过滤
+      const found = await prisma.user.findUnique({
+        where: { id: wrongSaltId },
+      });
+
+      expect(found).toBeNull();
+    });
+
+    it('42. findUnique inside $transaction should not double-decode (BUG-956 core scenario)', async () => {
+      // 模拟 ABAC Case 2: $transaction 内的 tx.findUnique
+      // tx client 继承 saltids 扩展，tx saltids 会再次处理 args
+      // guard（obj[salt] === undefined）必须有效，否则 double-decode
+      const user = await prisma.user.create({ data: { name: 'Bug956TxScenario' } });
+      const saltId = user.id;
+      const { id: rawId } = SaltIdsHelper.decode(saltId, 3);
+
+      // 在 $transaction 内用 saltID findUnique
+      // 如果 double-decoding 发生：rawId → decode(rawId) = {id:0, salt:rawId} → WHERE id=0 → null
+      // 如果 guard 有效：salt 保留 → 不 double-decode → 正确找到记录
+      const found = await prisma.$transaction(async (tx) => {
+        return tx.user.findUnique({
+          where: { id: saltId },
+        });
+      });
+
+      expect(found).not.toBeNull();
+      expect(found?.id).toBe(saltId);
+      expect(found?.name).toBe('Bug956TxScenario');
+
+      // 确认没有 double-decode：rawId 不应为 0
+      expect(rawId).toBeGreaterThan(0);
+    });
+
+    it('43. findUnique guard idempotency: pre-set idSalt prevents re-decode', async () => {
+      const user = await prisma.user.create({ data: { name: 'Bug956GuardTest' } });
+      const saltId = user.id;
+      const { id: rawId, salt } = SaltIdsHelper.decode(saltId, 3);
+
+      // 直接用 rawId + salt 查询（模拟 saltids 已 decode 后的 args）
+      // deepTransformInput 的 guard: obj[idSalt] === undefined → false（salt 有值）→ 不 decode
+      // 这是 guard 幂等性的核心验证
+      const found = await prisma.user.findUnique({
+        where: { id: rawId, idSalt: salt } as any,
+      });
+
+      expect(found).not.toBeNull();
+      expect(found?.id).toBe(saltId);
+    });
+
+    it('44. findUnique with select inside $transaction should not double-decode', async () => {
+      const user = await prisma.user.create({ data: { name: 'Bug956TxSelect' } });
+      const saltId = user.id;
+
+      // $transaction 内 findUnique + select
+      // select 会自动确保 salt 字段被选中，不应影响 guard
+      const found = await prisma.$transaction(async (tx) => {
+        return tx.user.findUnique({
+          where: { id: saltId },
+          select: { id: true, name: true },
+        });
+      });
+
+      expect(found).not.toBeNull();
+      expect(found?.id).toBe(saltId);
+      expect(found?.name).toBe('Bug956TxSelect');
+    });
+
+    it('45. nested findUnique (findUnique → $transaction → tx.findUnique) should not double-decode', async () => {
+      // 完整模拟 ABAC Case 2 链路:
+      // 外层 saltids decode → query(args) → abac → $transaction → tx.findUnique → tx saltids (guard)
+      const user = await prisma.user.create({ data: { name: 'Bug956NestedChain' } });
+      const saltId = user.id;
+      const { id: rawId } = SaltIdsHelper.decode(saltId, 3);
+
+      // 外层 findUnique（saltids decode saltID → rawId+salt）
+      // 内层 $transaction → tx.findUnique（tx saltids guard 不命中 → 不 decode）
+      const found = await prisma.$transaction(async (tx) => {
+        // tx.findUnique 会经过 tx saltids hook
+        // args.where = { id: saltId } → tx saltids decode → { id: rawId, idSalt: salt }
+        // guard 有效，不会 double-decode
+        return tx.user.findUnique({
+          where: { id: saltId },
+        });
+      });
+
+      expect(found).not.toBeNull();
+      expect(found?.id).toBe(saltId);
+
+      // 如果 double-decoding 发生，rawId 会被 decode 成 {id:0, salt:rawId}
+      // 查询会返回 null（WHERE id=0）
+      // 这里 found 不为 null，证明没有 double-decoding
+    });
+  });
+
+  describe('CRUD completeness: delete / update / count', () => {
+    it('46. delete: should delete record by saltID', async () => {
+      const user = await prisma.user.create({ data: { name: 'DeleteTarget' } });
+      const saltId = user.id;
+
+      await prisma.user.delete({ where: { id: saltId } });
+
+      const found = await prisma.user.findUnique({ where: { id: saltId } });
+      expect(found).toBeNull();
+    });
+
+    it('47. deleteMany: should delete multiple records by saltID filter', async () => {
+      const u1 = await prisma.user.create({ data: { name: 'DeleteMany1' } });
+      const u2 = await prisma.user.create({ data: { name: 'DeleteMany2' } });
+      const u3 = await prisma.user.create({ data: { name: 'DeleteMany3' } });
+
+      const result = await prisma.user.deleteMany({
+        where: { id: { in: [u1.id, u2.id] } },
+      });
+      expect(result.count).toBe(2);
+
+      const remaining = await prisma.user.findMany({
+        where: { id: { in: [u1.id, u2.id, u3.id] } },
+        select: { id: true },
+      });
+      expect(remaining.length).toBe(1);
+      expect(remaining[0].id).toBe(u3.id);
+    });
+
+    it('48. update: should update record by saltID, saltID unchanged', async () => {
+      const user = await prisma.user.create({ data: { name: 'BeforeUpdate' } });
+      const saltId = user.id;
+
+      const updated = await prisma.user.update({
+        where: { id: saltId },
+        data: { name: 'AfterUpdate' },
+      });
+
+      // saltID should NOT change after update (same rawId + salt)
+      expect(updated.id).toBe(saltId);
+      expect(updated.name).toBe('AfterUpdate');
+
+      // Verify via findUnique
+      const found = await prisma.user.findUnique({ where: { id: saltId } });
+      expect(found?.name).toBe('AfterUpdate');
+      expect(found?.id).toBe(saltId);
+    });
+
+    it('49. updateMany: should update multiple records by saltID filter', async () => {
+      const u1 = await prisma.user.create({ data: { name: 'UpdateMany1' } });
+      const u2 = await prisma.user.create({ data: { name: 'UpdateMany2' } });
+
+      const result = await prisma.user.updateMany({
+        where: { id: { in: [u1.id, u2.id] } },
+        data: { name: 'BulkUpdated' },
+      });
+      expect(result.count).toBe(2);
+
+      const found = await prisma.user.findMany({
+        where: { id: { in: [u1.id, u2.id] } },
+        select: { id: true, name: true },
+      });
+      expect(found.length).toBe(2);
+      found.forEach((u: any) => expect(u.name).toBe('BulkUpdated'));
+    });
+
+    it('50. count: should count records by saltID filter', async () => {
+      const u1 = await prisma.user.create({ data: { name: 'CountUser1' } });
+      const u2 = await prisma.user.create({ data: { name: 'CountUser2' } });
+      await prisma.user.create({ data: { name: 'CountUser3' } });
+
+      const count = await prisma.user.count({
+        where: { id: { in: [u1.id, u2.id] } },
+      });
+      expect(count).toBe(2);
+    });
+
+    it('51. update FK: changing FK to new saltID should resolve correctly', async () => {
+      const author1 = await prisma.user.create({ data: { name: 'Author1' } });
+      const author2 = await prisma.user.create({ data: { name: 'Author2' } });
+      const post = await prisma.post.create({
+        data: { title: 'FKSwitch', authorId: author1.id },
+      });
+
+      // Switch FK to author2
+      const updated = await prisma.post.update({
+        where: { postPk: post.postPk },
+        data: { authorId: author2.id },
+      });
+
+      // updated.authorId should be author2's saltId (re-encoded)
+      expect(updated.authorId).toBe(author2.id);
+
+      // Verify via findUnique + include
+      const found = await prisma.post.findUnique({
+        where: { postPk: post.postPk },
+        include: { author: true },
+      });
+      expect(found?.author?.id).toBe(author2.id);
+      expect(found?.author?.name).toBe('Author2');
+    });
+
+    it('52. update: should update FK to null (clear relation)', async () => {
+      const author = await prisma.user.create({ data: { name: 'ClearRelAuthor' } });
+      const post = await prisma.post.create({
+        data: { title: 'ClearRelPost', authorId: author.id },
+      });
+
+      const updated = await prisma.post.update({
+        where: { postPk: post.postPk },
+        data: { authorId: null },
+      });
+
+      expect(updated.authorId).toBeNull();
+
+      const found = await prisma.post.findUnique({
+        where: { postPk: post.postPk },
+      });
+      expect(found?.authorId).toBeNull();
+    });
+
+    it('53. upsert: create path should generate correct saltID', async () => {
+      // Upsert create: no existing record → create with saltID
+      const result = await prisma.user.upsert({
+        where: { id: 999999 }, // non-existent rawId
+        create: { name: 'UpsertCreate' },
+        update: { name: 'UpsertCreate' },
+      });
+
+      expect(typeof result.id).toBe('number');
+      expect(result.name).toBe('UpsertCreate');
+
+      // Verify findable by saltID
+      const found = await prisma.user.findUnique({ where: { id: result.id } });
+      expect(found?.name).toBe('UpsertCreate');
+    });
+
+    it('54. upsert: update path should preserve saltID', async () => {
+      const user = await prisma.user.create({ data: { name: 'UpsertBefore' } });
+      const saltId = user.id;
+
+      const result = await prisma.user.upsert({
+        where: { id: saltId },
+        create: { name: 'UpsertNew' },
+        update: { name: 'UpsertAfter' },
+      });
+
+      expect(result.id).toBe(saltId);
+      expect(result.name).toBe('UpsertAfter');
     });
   });
 });

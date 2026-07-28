@@ -28,7 +28,7 @@ In your code, you only deal with this public ID. In the database, it remains a h
 3.  🪄 **Zero Intrusion**:
     - **Read**: `user.id` is automatically transformed into the public ID.
     - **Write**: When saving to relation tables, the public ID is automatically unpacked into `xxx` and `xxxSalt` fields.
-    - **Query**: `findUnique({ where: { id: PublicID } })` is automatically handled.
+    - **Query**: `findUnique({ where: { id: PublicID }})` is automatically handled.
 4.  🔢 **Pure Integer**: The generated ID is still a number (`BigInt` or `Int`), making it URL-friendly and shorter than UUIDs.
 
 ## How to use?
@@ -53,8 +53,8 @@ model User {
 ### 3. Register Extension
 
 ```typescript
-import { PrismaClient } from "@prisma/client";
-import { saltIdsExtension } from "prisma-extension-saltids";
+import { PrismaClient } from '@prisma/client';
+import { saltIdsExtension } from 'prisma-extension-saltids';
 
 const prisma = new PrismaClient().$extends(
   saltIdsExtension({
@@ -95,7 +95,7 @@ Write code as usual, IDs are automatically obfuscated:
 ```typescript
 // Create: Just pass data, ID and Salt are auto-generated
 const user = await prisma.user.create({
-  data: { name: "Geek" },
+  data: { name: 'Geek' },
 });
 
 console.log(user.id);
@@ -123,15 +123,15 @@ If your SELECT returns `xxx` and `xxxSalt` (column aliases should follow your co
 - expose `xxx` as the public SaltID (getter)
 
 ```ts
-import { PrismaClient } from "@prisma/client";
-import { saltIdsExtension } from "prisma-extension-saltids";
+import { PrismaClient } from '@prisma/client';
+import { saltIdsExtension } from 'prisma-extension-saltids';
 
-const prisma = new PrismaClient().$extends(saltIdsExtension({ saltLength: 3, saltSuffix: "Salt" }));
+const prisma = new PrismaClient().$extends(saltIdsExtension({ saltLength: 3, saltSuffix: 'Salt' }));
 const s = prisma.$saltIds;
 
-const user = await prisma.user.create({ data: { name: "RawUser" } });
+const user = await prisma.user.create({ data: { name: 'RawUser' } });
 
-const uId = s.col("u", "id");
+const uId = s.col('u', 'id');
 const whereEq = s.where.eq(uId, user.id);
 
 const rows = await prisma.$queryRaw`
@@ -144,7 +144,7 @@ const rows = await prisma.$queryRaw`
 Unsafe positional example:
 
 ```ts
-const frag = s.where.eq(s.col("User", "id"), user.id);
+const frag = s.where.eq(s.col('User', 'id'), user.id);
 const u = s.toUnsafe(frag);
 const rows = await prisma.$queryRawUnsafe(`SELECT id FROM "User" WHERE ${u.sql}`, ...u.values);
 ```
@@ -184,7 +184,7 @@ saltId = sign(realId) * (abs(realId) * 10^saltLen + salt)
 3.  🪄 **零侵入**：
     - **读**：`user.id` 自动变成混淆 ID。
     - **写**：存入关联表时，自动拆解混淆 ID 存入 `xxx` 和 `xxxSalt` 两个字段。
-    - **查**：`findUnique({ where: { id: 混淆ID } })` 自动处理。
+    - **查**：`findUnique({ where: { id: 混淆ID }})` 自动处理。
 4.  🔢 **纯整型**：生成的 ID 依然是数字（`BigInt` 或 `Int`），适合用于 URL 和 JSON，比 UUID 更短更友好。
 
 ### 怎么用？
@@ -209,8 +209,8 @@ model User {
 #### 3. 注册扩展
 
 ```typescript
-import { PrismaClient } from "@prisma/client";
-import { saltIdsExtension } from "prisma-extension-saltids";
+import { PrismaClient } from '@prisma/client';
+import { saltIdsExtension } from 'prisma-extension-saltids';
 
 const prisma = new PrismaClient().$extends(
   saltIdsExtension({
@@ -251,7 +251,7 @@ const posts = await prisma.post.findMany({
 ```typescript
 // 创建：只需传入数据，ID 和 Salt 自动生成
 const user = await prisma.user.create({
-  data: { name: "Geek" },
+  data: { name: 'Geek' },
 });
 
 console.log(user.id);
@@ -278,15 +278,15 @@ Raw SQL 没有模型/字段上下文，因此本包不会在 raw 里"猜测"某�
 - 把 `xxx` 映射成对外 SaltID（getter）
 
 ```ts
-import { PrismaClient } from "@prisma/client";
-import { saltIdsExtension } from "prisma-extension-saltids";
+import { PrismaClient } from '@prisma/client';
+import { saltIdsExtension } from 'prisma-extension-saltids';
 
-const prisma = new PrismaClient().$extends(saltIdsExtension({ saltLength: 3, saltSuffix: "Salt" }));
+const prisma = new PrismaClient().$extends(saltIdsExtension({ saltLength: 3, saltSuffix: 'Salt' }));
 const s = prisma.$saltIds;
 
-const user = await prisma.user.create({ data: { name: "RawUser" } });
+const user = await prisma.user.create({ data: { name: 'RawUser' } });
 
-const uId = s.col("u", "id");
+const uId = s.col('u', 'id');
 const whereEq = s.where.eq(uId, user.id);
 
 const rows = await prisma.$queryRaw`
@@ -299,7 +299,7 @@ const rows = await prisma.$queryRaw`
 Unsafe positional 示例：
 
 ```ts
-const frag = s.where.eq(s.col("User", "id"), user.id);
+const frag = s.where.eq(s.col('User', 'id'), user.id);
 const u = s.toUnsafe(frag);
 const rows = await prisma.$queryRawUnsafe(`SELECT id FROM "User" WHERE ${u.sql}`, ...u.values);
 ```
