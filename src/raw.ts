@@ -1,8 +1,8 @@
-import { Prisma } from "@prisma/client";
-import { SaltIdsOptions } from "./types";
+import { Prisma as DefaultPrisma } from "@prisma/client";
+import { PrismaSqlNamespace, SaltIdsOptions } from "./types";
 import { SaltIdsHelper } from "./utils";
 
-type Sql = Prisma.Sql;
+type Sql = unknown;
 
 export type SaltIdsColumnRef = {
   base: Sql;
@@ -40,14 +40,14 @@ function decodeSaltId(publicId: unknown, saltLength: number): { id: number; salt
   return result as { id: number; salt: number };
 }
 
-function combineOr(parts: Sql[]): Sql {
-  if (parts.length === 0) return Prisma.sql`FALSE`;
+function combineOr(parts: Sql[], P: PrismaSqlNamespace): Sql {
+  if (parts.length === 0) return P.sql`FALSE`;
   if (parts.length === 1) return parts[0];
   let acc = parts[0];
   for (let i = 1; i < parts.length; i++) {
-    acc = Prisma.sql`${acc} OR ${parts[i]}`;
+    acc = P.sql`${acc} OR ${parts[i]}`;
   }
-  return Prisma.sql`(${acc})`;
+  return P.sql`(${acc})`;
 }
 
 function hijackObject(obj: any, fields: { baseKey: string; saltKey: string }[], saltLength: number) {
@@ -91,6 +91,14 @@ export function saltIdsSql(options?: SaltIdsOptions) {
   const saltLength = options?.saltLength ?? 4;
   const saltSuffix = options?.saltSuffix ?? "Salt";
 
+  // BUG-1209: Use the consumer's Prisma namespace when provided. If the
+  // consumer generates its Prisma client to a custom output path (e.g.
+  // `output = "../../src/.generated"`), the default `@prisma/client`'s
+  // `sql`/`raw` functions create `Sql` objects that the consumer's
+  // `$queryRaw` does not recognise — they get serialised as jsonb parameters
+  // instead of SQL fragments.
+  const P = options?.prisma ?? (DefaultPrisma as unknown as PrismaSqlNamespace);
+
   function col(base: string): SaltIdsColumnRef;
   function col(tableOrAlias: string, base: string): SaltIdsColumnRef;
   function col(a: string, b?: string): SaltIdsColumnRef {
@@ -98,8 +106,8 @@ export function saltIdsSql(options?: SaltIdsOptions) {
     const baseKey = b ?? a;
     const saltKey = `${baseKey}${saltSuffix}`;
     return {
-      base: Prisma.raw(qualified(table, baseKey)),
-      salt: Prisma.raw(qualified(table, saltKey)),
+      base: P.raw(qualified(table, baseKey)),
+      salt: P.raw(qualified(table, saltKey)),
       baseKey,
       saltKey,
     };
@@ -108,28 +116,28 @@ export function saltIdsSql(options?: SaltIdsOptions) {
   const where = {
     eq(c: SaltIdsColumnRef, publicId: number): Sql {
       const { id, salt } = decodeSaltId(publicId, saltLength);
-      return Prisma.sql`(${c.base} = ${id} AND ${c.salt} = ${salt})`;
+      return P.sql`(${c.base} = ${id} AND ${c.salt} = ${salt})`;
     },
     ne(c: SaltIdsColumnRef, publicId: number): Sql {
       const inner = where.eq(c, publicId);
-      return Prisma.sql`(NOT ${inner})`;
+      return P.sql`(NOT ${inner})`;
     },
     in(c: SaltIdsColumnRef, publicIds: number[]): Sql {
       const parts = publicIds.map((pid) => where.eq(c, pid));
-      return combineOr(parts);
+      return combineOr(parts, P);
     },
     gtRealId(c: SaltIdsColumnRef, realId: number): Sql {
-      return Prisma.sql`${c.base} > ${ensureNumber(realId)}`;
+      return P.sql`${c.base} > ${ensureNumber(realId)}`;
     },
     ltRealId(c: SaltIdsColumnRef, realId: number): Sql {
-      return Prisma.sql`${c.base} < ${ensureNumber(realId)}`;
+      return P.sql`${c.base} < ${ensureNumber(realId)}`;
     },
     betweenRealId(c: SaltIdsColumnRef, min: number, max: number): Sql {
       const a = ensureNumber(min);
       const b = ensureNumber(max);
       const lo = Math.min(a, b);
       const hi = Math.max(a, b);
-      return Prisma.sql`${c.base} BETWEEN ${lo} AND ${hi}`;
+      return P.sql`${c.base} BETWEEN ${lo} AND ${hi}`;
     },
     gtFromSaltId(c: SaltIdsColumnRef, publicId: number): Sql {
       const { id } = decodeSaltId(publicId, saltLength);

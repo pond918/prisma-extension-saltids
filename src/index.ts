@@ -1,18 +1,20 @@
+import { Prisma } from '@prisma/client';
 import { Prisma as PrismaExtension } from '@prisma/client/extension';
 import { BaseDMMF } from '@prisma/client/runtime/library';
 import { deepHijackResult, deepInjectSalt, deepTransformInput } from './logic';
 import { saltIdsSql } from './raw';
-import { SaltIdsOptions } from './types';
+import { PrismaSqlNamespace, SaltIdsOptions } from './types';
 import { ModelRegistry, SaltIdsHelper } from './utils';
 export { SaltIdsColumnRef, saltIdsSql } from './raw';
 
-export { SaltIdsHelper, SaltIdsOptions };
+export { SaltIdsHelper, SaltIdsOptions, PrismaSqlNamespace };
 
-export const saltIdsExtension = (options?: SaltIdsOptions, dmmf?: BaseDMMF) => {
+export const saltIdsExtension = (options?: SaltIdsOptions) => {
   const config: Required<SaltIdsOptions> = {
     saltLength: options?.saltLength ?? 4,
     saltSuffix: options?.saltSuffix ?? 'Salt',
     rawResultHijack: options?.rawResultHijack ?? true,
+    prisma: options?.prisma ?? (Prisma as unknown as PrismaSqlNamespace),
   };
 
   const registry = new ModelRegistry();
@@ -39,11 +41,11 @@ export const saltIdsExtension = (options?: SaltIdsOptions, dmmf?: BaseDMMF) => {
           async $allOperations({ model, operation, args, query }) {
             // Ensure registry is initialized
             if (!registry.initialized) {
-              const dmmf1 = dmmf ?? extractDmmfFromClient(client);
+              const dmmf1 = (config.prisma as any)?.dmmf ?? extractDmmfFromClient(client);
               if (!dmmf1) {
                 throw new Error(
                   'prisma-extension-saltids: Could not extract DMMF from client. ' +
-                    'Please pass dmmf explicitly: saltIdsExtension({}, Prisma.dmmf)'
+                    'Please pass prisma: Prisma in options.'
                 );
               }
               registry.init(dmmf1, config.saltSuffix);
