@@ -293,18 +293,37 @@ export function deepInjectSalt(
   // 1. 注入当前层级的 Salt
   if (!skipRootInjection) {
     const saltFields = registry.getSaltFields(modelName);
-    for (const { base, salt, hasDefaultValue, saltHasDefaultValue } of saltFields) {
+    for (const { base, salt, hasDefaultValue, defaultValue, saltHasDefaultValue } of saltFields) {
       // 修正后的策略：只有当 base 字段会有值，且 salt 字段没有默认值也没有被提供时，才生成 salt
-      // 场景 1: base 有默认值或用户提供值 -> base 会有值
+      // 场景 1: base 有标量默认值或用户提供非 null 值 -> base 会有值
+      //   NOTE (2.1.4a): an EXPLICIT null base means "no relation" (nullable
+      //   FK, e.g. Connector.contactId=null) — null !== undefined, but a null
+      //   base must NOT receive a salt: the injected salt column pollutes the
+      //   payload (flipping Prisma's checked/unchecked input discrimination,
+      //   breaking the create) and writes garbage next to a NULL base.
       // 场景 2: salt 没有默认值 -> salt 不会由 DB 生成
       // 场景 3: salt 未被提供 -> salt 当前没有值
       // 只有以上三个条件都满足时，才生成 salt
-      const baseWillHaveValue = hasDefaultValue || data[base] !== undefined;
+      const baseExplicitlyNull = data[base] === null;
+      const baseWillHaveValue = !baseExplicitlyNull && (hasDefaultValue || data[base] !== undefined);
       const saltHasNoValue = data[salt] === undefined;
       const saltNeedsGeneration = !saltHasDefaultValue;
 
       if (baseWillHaveValue && saltHasNoValue && saltNeedsGeneration) {
-        data[salt] = SaltIdsHelper.generateSalt(options.saltLength);
+        // 0-sentinel determinism (BUG-1403): a base value of exactly 0 is a
+        // "no relation / global" sentinel (e.g. Provider.engineId=0). A random
+        // salt would make the encoded read value (0*10^saltLen + salt = salt)
+        // lose the sentinel - encode(0, salt) must round-trip as 0, so the
+        // salt is deterministically 0.
+        // NOTE (2.1.4b): the sentinel check uses the EFFECTIVE base — the
+        // caller-provided value when present, otherwise the SCALAR default
+        // from the schema (@default(0)) — so the omit path
+        // (`engineId` absent, default 0) yields salt 0 as well, not a random
+        // salt. Autoincrement/unknown defaults keep the random salt (the id
+        // materializes nonzero at flush time).
+        const effectiveBase =
+          data[base] !== undefined ? data[base] : typeof defaultValue === 'number' ? defaultValue : undefined;
+        data[salt] = effectiveBase === 0 ? 0 : SaltIdsHelper.generateSalt(options.saltLength);
       }
     }
   }

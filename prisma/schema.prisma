@@ -43,6 +43,11 @@ model Product {
     ownerIdSalt Int?
     owner       User? @relation(fields: [ownerId], references: [id])
 
+    /// 2.1.4 test column: defaulted-0 base mirroring engine's
+    /// Provider.engineId / Connector.engineId (sentinel semantics).
+    badge     Int? @default(0)
+    badgeSalt Int?
+
     @@index([ownerId])
 }
 

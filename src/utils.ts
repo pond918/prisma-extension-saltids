@@ -67,6 +67,8 @@ export interface SaltField {
   base: string;
   salt: string;
   hasDefaultValue: boolean; // 标识 base 字段是否有默认值（autoincrement 或其他 @default）
+  /** Scalar default value when the schema declares a literal (@default(0)); undefined for autoincrement/dbgenerated. */
+  defaultValue?: number;
   saltHasDefaultValue: boolean; // 标识 salt 字段是否也有默认值
 }
 
@@ -101,11 +103,13 @@ export class ModelRegistry {
       const relationMap = new Map<string, RelationField>();
       const modelUniqueIndexes: UniqueIndexInfo[] = [];
 
-      const intFieldsMap = new Map<string, { hasDefaultValue: boolean }>();
+      const intFieldsMap = new Map<string, { hasDefaultValue: boolean; defaultValue?: number }>();
       fields.forEach((f) => {
         if (f.kind === 'scalar' && f.type === 'Int') {
           intFieldsMap.set(f.name, {
             hasDefaultValue: f.hasDefaultValue || false,
+            // DMMF: literal @default(0) → number; autoincrement/dbgenerated → object.
+            defaultValue: typeof f.default === 'number' ? f.default : undefined,
           });
         }
         if (f.kind === 'object') {
@@ -125,6 +129,7 @@ export class ModelRegistry {
             base: fieldName,
             salt: potentialSaltName,
             hasDefaultValue: metadata.hasDefaultValue,
+            defaultValue: metadata.defaultValue,
             saltHasDefaultValue: saltMetadata.hasDefaultValue,
           });
         }

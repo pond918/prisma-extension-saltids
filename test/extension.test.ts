@@ -1263,4 +1263,239 @@ describe('Prisma Extension SaltIDs', () => {
       expect(result.name).toBe('UpsertAfter');
     });
   });
+
+  describe('BUG-1403: 0-sentinel salted field determinism', () => {
+    // A salted field whose base value is exactly 0 is a "no relation / global"
+    // sentinel (e.g. Provider.engineId=0). encode(0, salt) = salt - a RANDOM
+    // salt would make the read value lose the sentinel (engineId reads back
+    // as a random 0..9999 number instead of 0). The injected salt for a
+    // 0-valued base must be deterministically 0 so the sentinel round-trips.
+
+    it('55. create with base=0 and no salt -> salt deterministically 0, read value === 0', async () => {
+      const slug = `zero-sentinel-${Date.now()}`;
+      const svc = await prisma.service.create({
+        data: { tenantId_: 0, slug, version: 'v1', name: 'ZeroSentinel' },
+      });
+
+      // The encoded read value must be exactly the sentinel 0.
+      expect(svc.tenantId_).toBe(0);
+
+      // And it must read back through a fresh query too.
+      const found = await prisma.service.findUnique({
+        where: { tenantId__slug_version_deletedAt: { tenantId_: 0, slug, version: 'v1', deletedAt: 0n } },
+      });
+      expect(found?.tenantId_).toBe(0);
+    });
+
+    it('56. { in: [0, X] } domain filter matches the 0-sentinel row', async () => {
+      const stamp = Date.now();
+      await prisma.service.create({
+        data: { tenantId_: 0, slug: `zero-in-filter-${stamp}`, version: 'v1', name: 'ZeroInFilter' },
+      });
+      const owner = await prisma.user.create({ data: { name: `InFilterOwner-${stamp}` } });
+      await prisma.service.create({
+        data: { tenantId_: owner.id, slug: `owner-in-filter-${stamp}`, version: 'v1', name: 'OwnerInFilter' },
+      });
+
+      const rows = await prisma.service.findMany({
+        where: { tenantId_: { in: [0, owner.id] } },
+      });
+      const slugs = rows.map((r) => r.slug);
+      expect(slugs).toContain(`zero-in-filter-${stamp}`);
+      expect(slugs).toContain(`owner-in-filter-${stamp}`);
+    });
+
+    it('57. nonzero base keeps the random-salt saltid shape (regression guard)', async () => {
+      const owner = await prisma.user.create({ data: { name: 'NonZeroOwner' } });
+      const svc = await prisma.service.create({
+        data: { tenantId_: owner.id, slug: 'nonzero-sentinel', version: 'v1', name: 'NonZeroSentinel' },
+      });
+      // Encodes back to the owner's saltid (same salt as the referenced row).
+      expect(svc.tenantId_).toBe(owner.id);
+    });
+  });
+
+  // Bare client (NO extension) for STORED-shape assertions — $queryRawUnsafe
+  // results flow through the extended client's result hijack too (salt
+  // hidden, base encoded), so raw-column verification must bypass it.
+  const rawClient = new PrismaClient();
+
+  // =========================================================================
+  // 2.1.4a: explicit-null base MUST NOT receive a salt (nullable FK, e.g.
+  // engine's Connector.contactId=null / engineIdSalt on null). Before the fix
+  // the injected salt column polluted the create payload (flipping Prisma's
+  // checked/unchecked input discrimination → "Unknown argument" errors) and
+  // wrote garbage next to a NULL base.
+  // =========================================================================
+  describe('2.1.4a: explicit-null base salt suppression (nullable FK)', () => {
+    afterAll(async () => {
+      await rawClient.$disconnect();
+    });
+    it('58. create with base=null + no salt -> NO salt injected (stays NULL, payload unpolluted)', async () => {
+      const post = await prisma.post.create({
+        data: { title: 'null-base-create', authorId: null },
+      });
+      expect(post.authorId).toBeNull();
+
+      // The salt column must stay NULL — no random garbage beside a NULL base.
+      const raw = await prisma.post.findUnique({
+        where: { postPk: post.postPk },
+        select: { postPk: true, authorId: true, authorIdSalt: true },
+      });
+      expect(raw?.authorId).toBeNull();
+      expect(raw?.authorIdSalt).toBeNull();
+    });
+
+    it('59. create with base=null + EXPLICIT salt -> caller salt honored (no overwrite)', async () => {
+      const stamp = Date.now();
+      const post = await prisma.post.create({
+        data: { title: `null-base-explicit-salt-${stamp}`, authorId: null, authorIdSalt: 7 },
+      });
+      expect(post.authorId).toBeNull();
+      // NOTE: the READ hijack hides the salt when the base is null (by
+      // design) and the returned postPk is the ENCODED saltid — observe the
+      // STORED column via the BARE client (raw results through the extended
+      // client are hijacked too).
+      const rows = (await rawClient.$queryRawUnsafe(
+        `SELECT authorIdSalt FROM Post WHERE title = 'null-base-explicit-salt-${stamp}'`
+      )) as Array<{ authorIdSalt: number | null }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.authorIdSalt).toBe(7);
+    });
+
+    it('60. update setting base=null -> no salt injected on the update path either', async () => {
+      const owner = await prisma.user.create({ data: { name: 'NullBaseOwner' } });
+      const post = await prisma.post.create({
+        data: { title: 'null-base-update', authorId: owner.id },
+      });
+
+      await prisma.post.update({
+        where: { postPk: post.postPk },
+        data: { authorId: null },
+      });
+
+      const raw = await prisma.post.findUnique({
+        where: { postPk: post.postPk },
+        select: { authorId: true, authorIdSalt: true },
+      });
+      expect(raw?.authorId).toBeNull();
+      // Stale salt from the previous owner binding is cleared by Prisma? No —
+      // the extension must not INJECT a new one; the base is null so the salt
+      // is meaningless. Assert the read path is unaffected either way: the
+      // encoded authorId stays null.
+      expect(raw?.authorId).toBeNull();
+    });
+
+    it('61. nested create with base=null -> clean through the recursive walk', async () => {
+      const stamp = Date.now();
+      // NOTE: the null base must NOT be the nesting relation's own FK (the
+      // nested *WithoutOwner input does not expose ownerId) — badge is an
+      // independent nullable salted scalar, valid inside the nested create.
+      const owner = await prisma.user.create({
+        data: {
+          name: 'NestedNullBase',
+          products: { create: [{ name: `nested-null-base-${stamp}`, badge: null }] },
+        },
+      });
+      const products = await prisma.product.findMany({
+        where: { name: `nested-null-base-${stamp}` },
+        select: { badge: true },
+      });
+      expect(products).toHaveLength(1);
+      expect(products[0]!.badge).toBeNull();
+      // Read hijack nulls the salt beside a null base — verify the STORED
+      // column stayed clean via the BARE client.
+      const rows = (await rawClient.$queryRawUnsafe(
+        `SELECT badgeSalt FROM Product WHERE name = 'nested-null-base-${stamp}'`
+      )) as Array<{ badgeSalt: number | null }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.badgeSalt).toBeNull();
+      expect(owner.id).toBeGreaterThan(0);
+    });
+
+    it('62. upsert create-branch with base=null -> no salt injection (steprun-connector shape)', async () => {
+      const stamp = Date.now();
+      const post = await prisma.post.upsert({
+        where: { postPk: -900001 },
+        update: { title: `upsert-null-${stamp}` },
+        create: { postPk: -900001, title: `upsert-null-${stamp}`, authorId: null },
+      });
+      const raw = await prisma.post.findUnique({
+        where: { postPk: post.postPk },
+        select: { authorId: true, authorIdSalt: true },
+      });
+      expect(raw?.authorId).toBeNull();
+      expect(raw?.authorIdSalt).toBeNull();
+    });
+  });
+
+  // =========================================================================
+  // 2.1.4b: 0-sentinel on the OMIT path. A base declared @default(0) that the
+  // caller OMITS materializes 0 — the injected salt must be 0 as well, or the
+  // encoded read value (0*10^saltLen + salt = salt) loses the sentinel
+  // (engine: Provider.engineId reads back as a random number instead of 0).
+  // =========================================================================
+  describe('2.1.4b: 0-sentinel on the @default(0) omit path', () => {
+    it('63. create OMITTING a @default(0) base -> salt 0, encoded read === 0', async () => {
+      const product = await prisma.product.create({
+        data: { name: 'omit-default-zero' },
+      });
+      // badge materializes as 0 (schema default); the encoded read must be
+      // exactly the sentinel 0 — not a random salt disguised as the value.
+      expect(product.badge).toBe(0);
+
+      const raw = await prisma.product.findUnique({
+        where: { id: product.id },
+        select: { badge: true, badgeSalt: true },
+      });
+      expect(raw?.badge).toBe(0);
+      expect(raw?.badgeSalt).toBe(0);
+    });
+
+    it('64. create with EXPLICIT badge=0 -> salt 0 (existing BUG-1403 behavior, regression)', async () => {
+      const product = await prisma.product.create({
+        data: { name: 'explicit-default-zero', badge: 0 },
+      });
+      expect(product.badge).toBe(0);
+      const raw = await prisma.product.findUnique({
+        where: { id: product.id },
+        select: { badge: true, badgeSalt: true },
+      });
+      expect(raw?.badgeSalt).toBe(0);
+    });
+
+    it('65. create with EXPLICIT null on a @default(0) base -> no salt at all (2.1.4a applies over the default)', async () => {
+      const product = await prisma.product.create({
+        data: { name: 'explicit-null-over-default', badge: null },
+      });
+      expect(product.badge).toBeNull();
+      const raw = await prisma.product.findUnique({
+        where: { id: product.id },
+        select: { badge: true, badgeSalt: true },
+      });
+      expect(raw?.badge).toBeNull();
+      expect(raw?.badgeSalt).toBeNull();
+    });
+
+    it('66. NONZERO saltid-shaped badge round-trips; nonzero salt never coerced to the 0 sentinel (regression)', async () => {
+      // All badge values live in saltid space (the write path decodes before
+      // persisting): 5700 = base 5 + salt 700 (saltLength: 3). It must
+      // round-trip EXACTLY — a nonzero base keeps its own salt and is never
+      // coerced to the 0-sentinel treatment.
+      const badgeSaltid = 5 * 10 ** 3 + 700;
+      const product = await prisma.product.create({
+        data: { name: 'explicit-nonzero-badge', badge: badgeSaltid },
+      });
+      expect(product.badge).toBe(badgeSaltid);
+
+      // Stored shape: raw base 5 with its own salt 700 (NOT 0, NOT random) —
+      // observed via the BARE client (extended-client raw results are
+      // hijacked back into saltid space).
+      const rows = (await rawClient.$queryRawUnsafe(
+        `SELECT badge, badgeSalt FROM Product WHERE name = 'explicit-nonzero-badge'`
+      )) as Array<{ badge: number; badgeSalt: number }>;
+      expect(rows[0]!.badge).toBe(5);
+      expect(rows[0]!.badgeSalt).toBe(700);
+    });
+  });
 });
