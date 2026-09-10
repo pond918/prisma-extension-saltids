@@ -14,6 +14,7 @@ export const saltIdsExtension = (options?: SaltIdsOptions) => {
     saltLength: options?.saltLength ?? 4,
     saltSuffix: options?.saltSuffix ?? 'Salt',
     rawResultHijack: options?.rawResultHijack ?? true,
+    chainFields: options?.chainFields ?? {},
     prisma: options?.prisma ?? (Prisma as unknown as PrismaSqlNamespace),
   };
 

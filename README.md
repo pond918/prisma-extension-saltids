@@ -153,7 +153,59 @@ Range comparisons:
 
 - `gtFromSaltId / ltFromSaltId / betweenFromSaltIds` compare by decoded `realId` only (salt cannot be validated for range queries).
 
-### 7. ⚠️ Limitation
+### 7. Chain columns (ids WITHOUT a Salt sibling)
+
+Some columns hold id handles but have no `xxxSalt` sibling — e.g. a materialized
+inheritance chain (`ancestorIds Int[]`), or a chain-head FK passed around as a
+salted id. The extension cannot discover these from the schema, so declare them:
+
+```prisma
+model Service {
+  id          Int   @id @default(autoincrement())
+  idSalt      Int?
+  inheritedId Int?  // chain-head FK, no Salt sibling
+  ancestorIds Int[] @default([]) // materialized chain, no Salt sibling
+}
+```
+
+```ts
+const prisma = new PrismaClient().$extends(
+  saltIdsExtension({
+    chainFields: { Service: ['inheritedId', 'ancestorIds'] },
+  })
+);
+
+// Write: salted in, raw out (stored raw, fits INT4)
+const parent = await prisma.service.findFirst({ where: { slug: 'base' } });
+await prisma.service.create({
+  data: { slug: 'child', inheritedId: parent.id, ancestorIds: [parent.id] },
+});
+// DB holds ancestorIds = [1], not [11000].
+
+// Read: chain columns are never hijacked (nothing to pair them with),
+// so they come back raw and plug straight into IN-lists:
+const child = await prisma.service.findFirst({ where: { slug: 'child' } });
+const chain = [child.id, ...child.ancestorIds]; // [saltedChild, 1]
+await prisma.skill.findMany({ where: { serviceId: { in: chain } } });
+// The salted child decodes to an {id, idSalt} pair; the raw 1 matches directly.
+```
+
+Rules: each potential-saltid element decodes to its raw id; zeros and
+negatives with `|v| < 10^saltLen` pass through; `{ set: [...] }` / `{ push: [...] }`
+envelopes decode element-wise. Undeclared models keep legacy behavior
+(zero behavior change). Minimal example: `test/chain-fields.test.ts`.
+
+**Shape-indistinguishability law (business-level contract):** the codec cannot
+tell a true saltid from a raw id that shares the shape (`isPotentialSaltId`
+judges by magnitude alone — every positive int is a potential saltid). The
+extension therefore never guesses intent: potential saltids always decode,
+nothing else ever does. Business code must pass chain ids the extension
+produced (true saltids) and must never smuggle bare raw ids (`|v| ≥ 10^saltLen`)
+into chain columns; the raw domain lives in the DB column only and never leaks
+into business concepts. Violations fail loudly (INT4 overflow / 0-hit reads),
+never silently.
+
+### 8. ⚠️ Limitation
 
 By default, the extension identifies fields matching the pattern `xxx` and `xxxSalt` as salted fields. Please be mindful of this naming convention when defining your schema.
 

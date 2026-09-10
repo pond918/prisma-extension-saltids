@@ -234,8 +234,50 @@ export function deepTransformInput(
     }
 
     const saltFieldDef = saltFields.find((f) => f.base === key);
+    const chainList = options.chainFields?.[modelName];
+    const isChainField = !!chainList && chainList.includes(key) && !saltFieldDef;
 
-    if (saltFieldDef && typeof val === 'number') {
+    if (isChainField && typeof val === 'number') {
+      // Scalar chain id (e.g. Service.inheritedId): salted in, raw out.
+      if (SaltIdsHelper.isPotentialSaltId(val, options.saltLength)) {
+        const { id } = SaltIdsHelper.decode(val, options.saltLength);
+        // Identity-safe: decode(0) === 0 — only flag a real change so the
+        // transform stays idempotent for re-entrant clients ($transaction).
+        if (id !== val) {
+          obj[key] = id;
+          didTransformId = true;
+        }
+      }
+    } else if (isChainField && Array.isArray(val)) {
+      // Int[] chain column (e.g. Service.ancestorIds): decode element-wise.
+      // Raw ids, negative fixture ids and zeros are not potential saltids
+      // and pass through untouched, so raw/salted mixed arrays are safe.
+      let changed = false;
+      obj[key] = val.map((v: unknown) => {
+        if (typeof v !== 'number') return v;
+        if (!SaltIdsHelper.isPotentialSaltId(v, options.saltLength)) return v;
+        const id = SaltIdsHelper.decode(v, options.saltLength).id;
+        if (id !== v) changed = true;
+        return id;
+      });
+      if (changed) didTransformId = true;
+    } else if (isChainField && isPlainObject(val)) {
+      // Prisma Int[] write envelope ({ set: [...] } / { push: [...] }):
+      // decode the array payload under the same element-wise law.
+      for (const op of ['set', 'push']) {
+        const list = (val as Record<string, unknown>)[op];
+        if (!Array.isArray(list)) continue;
+        let changed = false;
+        (val as Record<string, unknown>)[op] = list.map((v: unknown) => {
+          if (typeof v !== 'number') return v;
+          if (!SaltIdsHelper.isPotentialSaltId(v, options.saltLength)) return v;
+          const id = SaltIdsHelper.decode(v, options.saltLength).id;
+          if (id !== v) changed = true;
+          return id;
+        });
+        if (changed) didTransformId = true;
+      }
+    } else if (saltFieldDef && typeof val === 'number') {
       if (obj[saltFieldDef.salt] === undefined && SaltIdsHelper.isPotentialSaltId(val, options.saltLength)) {
         const { id, salt } = SaltIdsHelper.decode(val, options.saltLength);
         obj[key] = id;
