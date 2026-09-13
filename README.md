@@ -153,47 +153,76 @@ Range comparisons:
 
 - `gtFromSaltId / ltFromSaltId / betweenFromSaltIds` compare by decoded `realId` only (salt cannot be validated for range queries).
 
-### 7. Chain columns (ids WITHOUT a Salt sibling)
+### 7. Salt-list companion pairs (`Int[]` + `Int[]Salt`)
 
-Some columns hold id handles but have no `xxxSalt` sibling — e.g. a materialized
-inheritance chain (`ancestorIds Int[]`), or a chain-head FK passed around as a
-salted id. The extension cannot discover these from the schema, so declare them:
+Some columns hold MANY id handles at once — e.g. a materialized inheritance
+chain (`ancestorIds Int[]`). A single scalar salt cannot companion an array,
+so the companion is an array too: declare a PARALLEL salt column and the
+registry discovers the pair from the schema, exactly like scalar pairs. No
+extension option exists — declaration is configuration.
 
 ```prisma
 model Service {
   id          Int   @id @default(autoincrement())
-  idSalt      Int?
-  inheritedId Int?  // chain-head FK, no Salt sibling
-  ancestorIds Int[] @default([]) // materialized chain, no Salt sibling
+  idSalt      Int
+  inheritedId Int?            // chain-head FK (scalar pair, §4)
+  inheritedIdSalt Int?
+  ancestorIds     Int[] @default([]) // materialized chain, stores RAW ids
+  ancestorIdsSalt Int[] @default([]) // PARALLEL salts, element-wise
 }
 ```
 
-```ts
-const prisma = new PrismaClient().$extends(
-  saltIdsExtension({
-    chainFields: { Service: ['inheritedId', 'ancestorIds'] },
-  })
-);
+No extension option — the column pair above is the whole setup:
 
-// Write: salted in, raw out (stored raw, fits INT4)
+```ts
+// Write: handle array in, raw + parallel salts stored (fits INT4).
 const parent = await prisma.service.findFirst({ where: { slug: 'base' } });
 await prisma.service.create({
   data: { slug: 'child', inheritedId: parent.id, ancestorIds: [parent.id] },
 });
-// DB holds ancestorIds = [1], not [11000].
+// DB holds ancestorIds = [1] + ancestorIdsSalt = [<parent.idSalt>].
 
-// Read: chain columns are never hijacked (nothing to pair them with),
-// so they come back raw and plug straight into IN-lists:
+// Read: raw + salt arrays re-encode element-wise; the salt column is hidden.
 const child = await prisma.service.findFirst({ where: { slug: 'child' } });
-const chain = [child.id, ...child.ancestorIds]; // [saltedChild, 1]
+const chain = [child.id, ...child.ancestorIds]; // ALL salted handles
 await prisma.skill.findMany({ where: { serviceId: { in: chain } } });
-// The salted child decodes to an {id, idSalt} pair; the raw 1 matches directly.
+// Every element decodes to its own {id, idSalt} pair — strict match per row.
 ```
 
-Rules: each potential-saltid element decodes to its raw id; zeros and
-negatives with `|v| < 10^saltLen` pass through; `{ set: [...] }` / `{ push: [...] }`
-envelopes decode element-wise. Undeclared models keep legacy behavior
-(zero behavior change). Minimal example: `test/chain-fields.test.ts`.
+**Who matches what (query-time):** `ancestorIdsSalt` NEVER participates in
+queries — its only job is storage-side: letting the read-back re-encode the
+raw chain into handles. The salts that DO ride queries are the ones embedded
+in the handles: for `where: { targetId: { in: handles } }` on a registered
+scalar pair (`targetId` + `targetIdSalt`), each handle decodes to
+`(id, salt)` and the extension builds a strict OR of pairs —
+`targetId = <raw_i> AND targetIdSalt = <salt_i>` — so an element can only
+match the exact row it was produced from (same raw id with a different salt
+never matches).
+
+Rules:
+
+- **Write**: each potential-saltid element decodes into (raw, salt) slots;
+  zeros ride the 0-sentinel (encode(0, 0) === 0); negatives with
+  `|v| < 10^saltLen` pass through raw with salt slot 0. Salts are NEVER
+  auto-generated — every element references an EXISTING row, so its salt can
+  only come from the element handle itself, or from an explicit companion
+  array (`{ xxx: [...], xxxSalt: [...] }` = decode off, raw written as given).
+- **Update**: `{ set: [...] }` / `{ push: [...] }` envelopes decode into a
+  companion envelope of the same shape.
+- **Read**: unpaired elements (length drift, dangling ancestor) pass through
+  raw. List filter operators (`has` / `hasSome`) are NOT translated — feed
+  them raw ids (the storage domain).
+- **Query-time matching**: handle elements decode to strict `(id, salt)`
+  pairs (see "Who matches what" above). Non-handle elements (raw pass-throughs
+  from the write law above) fall into the bare `in` bucket — matched by id
+  alone, WITHOUT a salt check, so they can hit a row sharing the raw id but
+  not the salt. Lawful input (only extension-produced handles) never takes
+  that path.
+- **Kind-exact pairing**: a list `xxx` only pairs with a LIST `xxxSalt`
+  (a scalar sibling never pairs — deepInjectSalt must not generate a scalar
+  salt next to an array column).
+- Undeclared models keep legacy behavior (zero behavior change). Minimal
+  example: `test/salt-list-fields.test.ts`.
 
 **Shape-indistinguishability law (business-level contract):** the codec cannot
 tell a true saltid from a raw id that shares the shape (`isPotentialSaltId`
@@ -201,9 +230,9 @@ judges by magnitude alone — every positive int is a potential saltid). The
 extension therefore never guesses intent: potential saltids always decode,
 nothing else ever does. Business code must pass chain ids the extension
 produced (true saltids) and must never smuggle bare raw ids (`|v| ≥ 10^saltLen`)
-into chain columns; the raw domain lives in the DB column only and never leaks
-into business concepts. Violations fail loudly (INT4 overflow / 0-hit reads),
-never silently.
+into companion columns; the raw domain lives in the DB column only and never
+leaks into business concepts. Violations fail loudly (INT4 overflow / 0-hit
+reads), never silently.
 
 ### 8. ⚠️ Limitation
 

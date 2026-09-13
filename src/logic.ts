@@ -234,47 +234,63 @@ export function deepTransformInput(
     }
 
     const saltFieldDef = saltFields.find((f) => f.base === key);
-    const chainList = options.chainFields?.[modelName];
-    const isChainField = !!chainList && chainList.includes(key) && !saltFieldDef;
+    const saltListDef = registry.getSaltListFields(modelName).find((f) => f.base === key);
 
-    if (isChainField && typeof val === 'number') {
-      // Scalar chain id (e.g. Service.inheritedId): salted in, raw out.
-      if (SaltIdsHelper.isPotentialSaltId(val, options.saltLength)) {
-        const { id } = SaltIdsHelper.decode(val, options.saltLength);
-        // Identity-safe: decode(0) === 0 — only flag a real change so the
-        // transform stays idempotent for re-entrant clients ($transaction).
-        if (id !== val) {
-          obj[key] = id;
-          didTransformId = true;
+    if (saltListDef && Array.isArray(val)) {
+      // Salt-list companion pair (e.g. Service.ancestorIds riding
+      // ancestorIdsSalt): element-wise decode of the handle array into raw
+      // ids + a PARALLEL salt array — the array twin of the scalar branch
+      // below. The salts are never generated (deepInjectSalt skips list
+      // pairs): every element references an EXISTING row, so its salt can
+      // only come from the handle itself, or from an explicit companion
+      // array (rule ① — decode off, raw written as given).
+      // The `obj[salt] === undefined` guard doubles as the re-entrancy
+      // guard for transaction clients that inherit the extension.
+      if (obj[saltListDef.salt] === undefined) {
+        const raws: unknown[] = [];
+        const salts: number[] = [];
+        let changed = false;
+        for (const v of val) {
+          if (typeof v === 'number' && v !== 0 && SaltIdsHelper.isPotentialSaltId(v, options.saltLength)) {
+            const { id, salt } = SaltIdsHelper.decode(v, options.saltLength);
+            raws.push(id!);
+            salts.push(salt!);
+            if (id !== v) changed = true;
+          } else {
+            // 0 rides the 0-sentinel law (BUG-1403: encode(0, 0) === 0);
+            // any other non-handle element passes through raw with salt
+            // slot 0 — same garbage-in-garbage-out contract as scalars.
+            raws.push(v);
+            salts.push(0);
+          }
         }
+        obj[key] = raws;
+        obj[saltListDef.salt] = salts;
+        if (changed) didTransformId = true;
       }
-    } else if (isChainField && Array.isArray(val)) {
-      // Int[] chain column (e.g. Service.ancestorIds): decode element-wise.
-      // Raw ids, negative fixture ids and zeros are not potential saltids
-      // and pass through untouched, so raw/salted mixed arrays are safe.
-      let changed = false;
-      obj[key] = val.map((v: unknown) => {
-        if (typeof v !== 'number') return v;
-        if (!SaltIdsHelper.isPotentialSaltId(v, options.saltLength)) return v;
-        const id = SaltIdsHelper.decode(v, options.saltLength).id;
-        if (id !== v) changed = true;
-        return id;
-      });
-      if (changed) didTransformId = true;
-    } else if (isChainField && isPlainObject(val)) {
-      // Prisma Int[] write envelope ({ set: [...] } / { push: [...] }):
-      // decode the array payload under the same element-wise law.
-      for (const op of ['set', 'push']) {
+    } else if (saltListDef && isPlainObject(val)) {
+      // Prisma list write envelopes: { set: [...] } / { push: [...] } ride
+      // the same element-wise decode, mirrored into a companion salt
+      // envelope of the same shape.
+      for (const op of ['set', 'push'] as const) {
         const list = (val as Record<string, unknown>)[op];
         if (!Array.isArray(list)) continue;
+        const raws: unknown[] = [];
+        const salts: number[] = [];
         let changed = false;
-        (val as Record<string, unknown>)[op] = list.map((v: unknown) => {
-          if (typeof v !== 'number') return v;
-          if (!SaltIdsHelper.isPotentialSaltId(v, options.saltLength)) return v;
-          const id = SaltIdsHelper.decode(v, options.saltLength).id;
-          if (id !== v) changed = true;
-          return id;
-        });
+        for (const v of list) {
+          if (typeof v === 'number' && v !== 0 && SaltIdsHelper.isPotentialSaltId(v, options.saltLength)) {
+            const { id, salt } = SaltIdsHelper.decode(v, options.saltLength);
+            raws.push(id!);
+            salts.push(salt!);
+            if (id !== v) changed = true;
+          } else {
+            raws.push(v);
+            salts.push(0);
+          }
+        }
+        (val as Record<string, unknown>)[op] = raws;
+        (obj as Record<string, unknown>)[saltListDef.salt] = { [op]: salts };
         if (changed) didTransformId = true;
       }
     } else if (saltFieldDef && typeof val === 'number') {
@@ -440,6 +456,30 @@ export function deepHijackResult(
           const saltFields = registry.getSaltFields(modelName);
           shouldHijack = saltFields.some((f) => f.base === baseKey && f.salt === key);
         }
+      }
+
+      // 0.5 Salt-LIST companion pair: element-wise re-encode into handle
+      // values and hide the parallel salt column — the array twin of the
+      // scalar hijack below. Elements whose salt slot is missing/not a
+      // number (dangling ancestor, length drift) pass through raw.
+      const listDef = registry && modelName ? registry.getSaltListFields(modelName).find((f) => f.salt === key) : undefined;
+      if (listDef) {
+        const saltArr = data[key];
+        const baseArr = data[baseKey];
+        if (Array.isArray(saltArr) && Array.isArray(baseArr)) {
+          Object.defineProperty(data, key, {
+            enumerable: false,
+            value: saltArr,
+            writable: true,
+            configurable: true,
+          });
+          data[baseKey] = baseArr.map((raw: unknown, i: number) =>
+            typeof raw === 'number' && typeof saltArr[i] === 'number'
+              ? SaltIdsHelper.encode(raw, saltArr[i], options.saltLength)
+              : raw
+          );
+        }
+        continue;
       }
 
       if (shouldHijack && typeof saltVal === 'number' && typeof baseVal === 'number') {

@@ -14,7 +14,6 @@ export const saltIdsExtension = (options?: SaltIdsOptions) => {
     saltLength: options?.saltLength ?? 4,
     saltSuffix: options?.saltSuffix ?? 'Salt',
     rawResultHijack: options?.rawResultHijack ?? true,
-    chainFields: options?.chainFields ?? {},
     prisma: options?.prisma ?? (Prisma as unknown as PrismaSqlNamespace),
   };
 
@@ -99,6 +98,19 @@ export const saltIdsExtension = (options?: SaltIdsOptions) => {
                   args.select[salt] = true;
                 }
                 // Ensure base field is also selected when not explicitly included
+                if (args.select[base] === undefined) {
+                  args.select[base] = true;
+                }
+              }
+
+              // List companion pairs ride the same law: the parallel salt
+              // array MUST ride the projection or the read-back has nothing
+              // to re-encode element-wise from.
+              for (const { salt, base } of registry.getSaltListFields(model)) {
+                if (args.select[base] === false) continue;
+                if (args.select[salt] !== true) {
+                  args.select[salt] = true;
+                }
                 if (args.select[base] === undefined) {
                   args.select[base] = true;
                 }

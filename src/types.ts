@@ -33,22 +33,6 @@ export interface SaltIdsOptions {
   rawResultHijack?: boolean;
 
   /**
-   * Id-handle columns WITHOUT a Salt sibling (e.g. a materialized
-   * inheritance chain `Service.ancestorIds: Int[]`, or a chain-head FK
-   * `Service.inheritedId: Int?` when the caller passes salted ids without
-   * the salt column).
-   *
-   * Storage law: chain columns store RAW ids. On the write path each
-   * potential-saltid element is decoded to its raw id; non-saltid
-   * elements (raw ids, negative fixture ids, zeros) pass through
-   * untouched. The read path never hijacks these columns (no Salt
-   * sibling exists), so they are raw on the way out as well.
-   *
-   * Absent by default — undeclared models keep legacy behavior.
-   */
-  chainFields?: Record<string, string[]>;
-
-  /**
    * The consumer's Prisma SQL namespace (`Prisma.sql` / `Prisma.raw`).
    *
    * Required when the consumer uses a custom Prisma client output path —

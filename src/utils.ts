@@ -72,6 +72,23 @@ export interface SaltField {
   saltHasDefaultValue: boolean; // 标识 salt 字段是否也有默认值
 }
 
+/**
+ * A companion salt pair where BOTH sides are list scalars (`Int[]` +
+ * `Int[]Salt`), e.g. a materialized handle chain `ancestorIds Int[]` riding
+ * `ancestorIdsSalt Int[]` (element-wise parallel salts).
+ *
+ * List pairs follow the same declaration-as-configuration law as scalar
+ * pairs: the schema column pair IS the opt-in, no extension option exists.
+ * Semantics differ from scalars in exactly one way — salts are NEVER
+ * auto-generated (deepInjectSalt skips list pairs): every element references
+ * an EXISTING row, so its salt can only come from the element handle itself
+ * (write-side decode) or an explicit companion array.
+ */
+export interface SaltListField {
+  base: string;
+  salt: string;
+}
+
 export interface RelationField {
   name: string;
   type: string;
@@ -85,6 +102,7 @@ export interface UniqueIndexInfo {
 
 export class ModelRegistry {
   private saltFields = new Map<string, SaltField[]>();
+  private saltListFields = new Map<string, SaltListField[]>();
   private relations = new Map<string, Map<string, RelationField>>();
   private uniqueIndexes = new Map<string, UniqueIndexInfo[]>();
   public initialized = false;
@@ -100,30 +118,41 @@ export class ModelRegistry {
     for (const model of models) {
       const fields = model.fields as any[];
       const validSalts: SaltField[] = [];
+      const validListSalts: SaltListField[] = [];
       const relationMap = new Map<string, RelationField>();
       const modelUniqueIndexes: UniqueIndexInfo[] = [];
 
-      const intFieldsMap = new Map<string, { hasDefaultValue: boolean; defaultValue?: number }>();
+      // Scalar and list Int fields are collected SEPARATELY so a pair can
+      // only form within its own kind — a scalar `xxxSalt` must never pair
+      // with a list `xxx` (or vice versa): deepInjectSalt would auto-generate
+      // a scalar salt next to an array column and the write would blow up on
+      // the Prisma input type.
+      const scalarIntFields = new Map<string, { hasDefaultValue: boolean; defaultValue?: number }>();
+      const listIntFields = new Set<string>();
       fields.forEach((f) => {
-        if (f.kind === 'scalar' && f.type === 'Int') {
-          intFieldsMap.set(f.name, {
-            hasDefaultValue: f.hasDefaultValue || false,
-            // DMMF: literal @default(0) → number; autoincrement/dbgenerated → object.
-            defaultValue: typeof f.default === 'number' ? f.default : undefined,
-          });
-        }
         if (f.kind === 'object') {
           relationMap.set(f.name, {
             name: f.name,
             type: f.type,
             isList: f.isList,
           });
+          return;
         }
+        if (f.kind !== 'scalar' || f.type !== 'Int') return;
+        if (f.isList) {
+          listIntFields.add(f.name);
+          return;
+        }
+        scalarIntFields.set(f.name, {
+          hasDefaultValue: f.hasDefaultValue || false,
+          // DMMF: literal @default(0) → number; autoincrement/dbgenerated → object.
+          defaultValue: typeof f.default === 'number' ? f.default : undefined,
+        });
       });
 
-      intFieldsMap.forEach((metadata, fieldName) => {
+      scalarIntFields.forEach((metadata, fieldName) => {
         const potentialSaltName = `${fieldName}${suffix}`;
-        const saltMetadata = intFieldsMap.get(potentialSaltName);
+        const saltMetadata = scalarIntFields.get(potentialSaltName);
         if (saltMetadata) {
           validSalts.push({
             base: fieldName,
@@ -132,6 +161,13 @@ export class ModelRegistry {
             defaultValue: metadata.defaultValue,
             saltHasDefaultValue: saltMetadata.hasDefaultValue,
           });
+        }
+      });
+
+      listIntFields.forEach((fieldName) => {
+        const potentialSaltName = `${fieldName}${suffix}`;
+        if (listIntFields.has(potentialSaltName)) {
+          validListSalts.push({ base: fieldName, salt: potentialSaltName });
         }
       });
 
@@ -154,6 +190,7 @@ export class ModelRegistry {
       }
 
       this.saltFields.set(model.name, validSalts);
+      this.saltListFields.set(model.name, validListSalts);
       this.relations.set(model.name, relationMap);
       this.uniqueIndexes.set(model.name, modelUniqueIndexes);
     }
@@ -161,6 +198,11 @@ export class ModelRegistry {
 
   getSaltFields(model: string): SaltField[] {
     return this.saltFields.get(model) || [];
+  }
+
+  /** Companion salt pairs where both sides are list scalars (`Int[]`). */
+  getSaltListFields(model: string): SaltListField[] {
+    return this.saltListFields.get(model) || [];
   }
 
   getRelation(model: string, field: string): RelationField | undefined {
