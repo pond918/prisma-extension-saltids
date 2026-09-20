@@ -234,7 +234,34 @@ into companion columns; the raw domain lives in the DB column only and never
 leaks into business concepts. Violations fail loudly (INT4 overflow / 0-hit
 reads), never silently.
 
-### 8. ⚠️ Limitation
+### 8. Boundary columns must declare the pair (schema law)
+
+Every column that can receive a salted handle at a system boundary — HTTP API
+DTOs, Engine JWT claims, client SDK payloads, cross-engine call chains — MUST
+declare the `column + columnSalt` pair in the schema (scalar pair, §4; list
+pair, §7). The registry scans the DMMF at init time; the column pair IS the
+only opt-in — no extension option can replace the declaration.
+
+- Internal tables are not exempt. `@DtoIgnoreModel` / "never exposed to end
+  users" is irrelevant: the test is what VALUE FORM the writers hand the
+  column, not whether the table is visible. If an internal table receives
+  salted handles, its FK still needs the pair (e.g. an internal mark table's
+  `ownerOgentId` + `ownerOgentIdSalt`).
+- Genuine raw channels (BigInt-width columns storing the handle verbatim,
+  kernel file handles, internal raw-id planes that never mix domains) must
+  register their exemption reason in a schema comment.
+
+Violation consequences:
+
+- An unpaired INT4 column that receives a handle overflows once the raw id
+  reaches ~214748 (with `saltLength: 4` the handle magnitude is
+  `raw * 10^4 + salt`): Postgres fails with `integer out of range` — a
+  production write cliff, not a corner case.
+- A wider column (BigInt) "fits" the handle verbatim, but the salt is welded
+  into the value: the read side can never re-encode it, and strict
+  `(id, salt)` matching can never join it — permanent 0-hit reads.
+
+### 9. ⚠️ Limitation
 
 By default, the extension identifies fields matching the pattern `xxx` and `xxxSalt` as salted fields. Please be mindful of this naming convention when defining your schema.
 
