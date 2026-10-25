@@ -1,6 +1,8 @@
-import { Prisma } from '@prisma/client';
-import { Prisma as PrismaExtension } from '@prisma/client/extension';
-import { BaseDMMF } from '@prisma/client/runtime/library';
+// NOTE: no value import of `@prisma/client` at module top level — a fresh
+// install (consumer has not run `prisma generate` yet) must be able to import
+// this package without a generated client. `BaseDMMF` is type-only and fully
+// erased at compile time.
+import type { BaseDMMF } from '@prisma/client/runtime/library';
 import { deepHijackResult, deepInjectSalt, deepTransformInput } from './logic';
 import { saltIdsSql } from './raw';
 import { PrismaSqlNamespace, SaltIdsOptions } from './types';
@@ -10,11 +12,23 @@ export { SaltIdsColumnRef, saltIdsSql } from './raw';
 export { SaltIdsHelper, SaltIdsOptions, PrismaSqlNamespace };
 
 export const saltIdsExtension = (options?: SaltIdsOptions) => {
+  // Load-time contract: importing this module never touches `@prisma/client`,
+  // so fresh installs can import `SaltIdsHelper` / `saltIdsSql` before running
+  // `prisma generate`. The client is resolved lazily here, at factory-call
+  // time — the runtime comes from the host, so by wiring time (when
+  // `saltIdsExtension()` is invoked) the host's Prisma client must already
+  // be generated.
+  const { Prisma: PrismaExtension } = require('@prisma/client/extension') as typeof import(
+    '@prisma/client/extension'
+  );
+
   const config: Required<SaltIdsOptions> = {
     saltLength: options?.saltLength ?? 4,
     saltSuffix: options?.saltSuffix ?? 'Salt',
     rawResultHijack: options?.rawResultHijack ?? true,
-    prisma: options?.prisma ?? (Prisma as unknown as PrismaSqlNamespace),
+    prisma:
+      options?.prisma ??
+      ((require('@prisma/client') as typeof import('@prisma/client')).Prisma as unknown as PrismaSqlNamespace),
   };
 
   const registry = new ModelRegistry();

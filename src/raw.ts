@@ -1,4 +1,5 @@
-import { Prisma as DefaultPrisma } from "@prisma/client";
+// NOTE: no value import of `@prisma/client` at module top level — importing
+// this module must work on fresh installs without a generated client.
 import { PrismaSqlNamespace, SaltIdsOptions } from "./types";
 import { SaltIdsHelper } from "./utils";
 
@@ -97,7 +98,12 @@ export function saltIdsSql(options?: SaltIdsOptions) {
   // `sql`/`raw` functions create `Sql` objects that the consumer's
   // `$queryRaw` does not recognise — they get serialised as jsonb parameters
   // instead of SQL fragments.
-  const P = options?.prisma ?? (DefaultPrisma as unknown as PrismaSqlNamespace);
+  // Load-time contract: `@prisma/client` is resolved lazily here, at factory
+  // call time — the runtime comes from the host, so `saltIdsSql()` must be
+  // called after the host's Prisma client has been generated.
+  const P =
+    options?.prisma ??
+    ((require("@prisma/client") as typeof import("@prisma/client")).Prisma as unknown as PrismaSqlNamespace);
 
   function col(base: string): SaltIdsColumnRef;
   function col(tableOrAlias: string, base: string): SaltIdsColumnRef;

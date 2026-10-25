@@ -265,6 +265,18 @@ Violation consequences:
 
 By default, the extension identifies fields matching the pattern `xxx` and `xxxSalt` as salted fields. Please be mindful of this naming convention when defining your schema.
 
+### 10. Load-time contract / fresh installs
+
+Importing this package never touches `@prisma/client` at module load time — a
+fresh install (the consumer has **not** run `prisma generate` yet) can safely
+`require` / `import` it. Pure-arithmetic helpers such as `SaltIdsHelper` and
+the `saltIdsSql` module are usable immediately.
+
+The client itself is resolved lazily, at **factory-call time**: when you invoke
+`saltIdsExtension()` (or `saltIdsSql()` without an explicit `prisma` option),
+`@prisma/client` is loaded on the spot. The runtime comes from the host — by
+wiring time the host's Prisma client must already be generated.
+
 ---
 
 <a name="chinese"></a>
