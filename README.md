@@ -153,6 +153,25 @@ Range comparisons:
 
 - `gtFromSaltId / ltFromSaltId / betweenFromSaltIds` compare by decoded `realId` only (salt cannot be validated for range queries).
 
+### 6b. Json fields are opaque (zero intrusion)
+
+DMMF `Json`-typed fields are business values, not model columns. The
+extension never interprets keys inside them — not on writes, not in filter
+operands (`equals`, `path`, array operators). A nested key that happens to
+share a model column name (e.g. `req.userId` vs the `userId` column) is left
+verbatim: no decode, no injected `*Salt` siblings. There is no option to
+change this; the schema field type is the whole configuration.
+
+Consequences:
+
+- Business code passes public handles through Json untouched and reads
+  back exactly what it wrote. No business-layer encode/decode.
+- A Json handle that must match a model row has to cross the boundary
+  explicitly through `prisma.$saltIds` (decode once, match `raw AND salt`).
+  Never compare an extracted Json number directly against a raw id column —
+  equal `raw` with different `salt` is a different identity.
+- Same-raw/different-salt and absent-pair evidence always refuse.
+
 ### 7. Salt-list companion pairs (`Int[]` + `Int[]Salt`)
 
 Some columns hold MANY id handles at once — e.g. a materialized inheritance
@@ -427,6 +446,16 @@ const rows = await prisma.$queryRawUnsafe(`SELECT id FROM "User" WHERE ${u.sql}`
 范围比较：
 
 - `gtFromSaltId / ltFromSaltId / betweenFromSaltIds` 仅比较解码后的 `realId`（范围查询无法做 salt 校验）。
+
+#### 6b. Json 字段不透明（业务零侵入）
+
+DMMF `Json` 类型字段是业务值，不是模型列。扩展从不解释其内部键名——写入和过滤操作数（`equals`、`path`、数组操作）一律原样保留。即使嵌套键与模型列同名（如 `req.userId` 与 `userId` 列），也原样保留：不拆解、不注入 `*Salt` 兄弟字段。此行为无开关，字段类型即全部配置。
+
+推论：
+
+- 业务代码在 Json 中透传公开 handle，写入什么读回什么，无需业务层编解码。
+- Json 内 handle 若需关联模型行，必须经 `prisma.$saltIds` 显式跨越边界（解码一次，同时匹配 `raw AND salt`）。绝不能把提取出的 Json 数字直接与 raw id 列比较——同 raw 不同 salt 是不同身份。
+- 同 raw 不同 salt、缺 salt 证据一律拒绝。
 
 #### 7. ⚠️ 限制
 

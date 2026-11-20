@@ -105,6 +105,10 @@ export class ModelRegistry {
   private saltListFields = new Map<string, SaltListField[]>();
   private relations = new Map<string, Map<string, RelationField>>();
   private uniqueIndexes = new Map<string, UniqueIndexInfo[]>();
+  /** DMMF `Json`-typed scalar fields per model. Values under these keys are
+   * opaque business payloads: the transformer must never interpret nested
+   * keys as model columns, even on coincident names. */
+  private jsonFields = new Map<string, Set<string>>();
   public initialized = false;
 
   init(dmmf: any, suffix: string) {
@@ -129,6 +133,7 @@ export class ModelRegistry {
       // the Prisma input type.
       const scalarIntFields = new Map<string, { hasDefaultValue: boolean; defaultValue?: number }>();
       const listIntFields = new Set<string>();
+      const jsonFieldNames = new Set<string>();
       fields.forEach((f) => {
         if (f.kind === 'object') {
           relationMap.set(f.name, {
@@ -138,7 +143,12 @@ export class ModelRegistry {
           });
           return;
         }
-        if (f.kind !== 'scalar' || f.type !== 'Int') return;
+        if (f.kind !== 'scalar' || f.type !== 'Int') {
+          // Track DMMF Json-typed fields so the transformer treats their
+          // whole subtree as opaque instead of reusing the current model map.
+          if (f.kind === 'scalar' && (f as any).type === 'Json') jsonFieldNames.add(f.name);
+          return;
+        }
         if (f.isList) {
           listIntFields.add(f.name);
           return;
@@ -193,11 +203,17 @@ export class ModelRegistry {
       this.saltListFields.set(model.name, validListSalts);
       this.relations.set(model.name, relationMap);
       this.uniqueIndexes.set(model.name, modelUniqueIndexes);
+      this.jsonFields.set(model.name, jsonFieldNames);
     }
   }
 
   getSaltFields(model: string): SaltField[] {
     return this.saltFields.get(model) || [];
+  }
+
+  /** Whether `field` is a DMMF `Json`-typed scalar of `model`. */
+  isJsonField(model: string, field: string): boolean {
+    return this.jsonFields.get(model)?.has(field) ?? false;
   }
 
   /** Companion salt pairs where both sides are list scalars (`Int[]`). */

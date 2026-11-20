@@ -215,6 +215,11 @@ export function deepTransformInput(
   for (const key of Object.keys(obj)) {
     const val = obj[key];
 
+    // Opaque Json boundary: a DMMF Json-typed field carries business values,
+    // not model columns. Never interpret nested keys on coincident names —
+    // neither write payloads nor filter operands (equals/path/array).
+    if (registry.isJsonField(modelName, key)) continue;
+
     if (isUniqueIndexKey(key) && isPlainObject(val)) {
       const indexFields = getUniqueIndexFields(key);
       if (indexFields) {
